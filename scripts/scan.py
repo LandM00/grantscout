@@ -44,6 +44,7 @@ import json
 import os
 import re
 import sys
+from collections import deque
 from datetime import datetime, timezone
 
 import requests
@@ -689,6 +690,98 @@ def build_horizon_terms(keywords, translations, limit=6):
     return terms
 
 
+# Sequenze di lettere (Unicode: gestisce anche accenti come "à") usate per
+# scomporre sia le pagine monitorate che le parole chiave in singole parole,
+# ignorando numeri e punteggiatura.
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Sotto questa lunghezza una parola NON viene ridotta: parole corte hanno
+# poche lettere di "riserva" da tagliare senza rischiare di confonderla con
+# una parola diversa (es. non vogliamo ridurre "casa" o "vita").
+_MIN_LEN_FOR_STEM = 5
+
+
+def _stem(word):
+    """Approssima la radice di una parola per riconoscere le variazioni piu
+    comuni di plurale/genere, invece di richiedere un confronto letterale
+    identico (il comportamento precedente: "migrante" non trovava
+    "migranti", "agricola" non trovava "agricole"). Toglie l'ultima
+    lettera se e una vocale (variazioni italiane piu comuni: -a/-e/-i/-o)
+    o una "s" finale (plurale inglese: migrant/migrants).
+
+    Non e un vero stemmer linguistico (userebbe librerie NLP che
+    appesantirebbero un progetto pensato per restare semplice e gratuito):
+    e deliberatamente permissivo, perche ogni segnalazione di questa app
+    va comunque verificata a mano — un falso positivo in piu costa una
+    verifica in piu, un falso negativo fa perdere un'opportunita reale
+    senza che l'utente se ne accorga mai."""
+    if len(word) > _MIN_LEN_FOR_STEM and word[-1] in "aeious":
+        return word[:-1]
+    return word
+
+
+def _tokenize(text_lower):
+    return _WORD_RE.findall(text_lower)
+
+
+def keyword_matches_text(keyword, tokens, window=6):
+    """Confronto tollerante tra una parola chiave (anche di piu parole,
+    es. "lavoro agricolo") e il testo gia scomposto in parole (`tokens`,
+    vedi _tokenize — passato gia pronto perche lo stesso testo viene
+    confrontato con piu parole chiave, non ha senso ri-scomporlo ogni
+    volta). Per una keyword di una sola parola: basta che una parola del
+    testo INIZI con la sua radice approssimata (vedi _stem) — cosi
+    "migrante" trova sia "migrante" che "migranti" nel testo, ma non
+    "migratorio" (radice diversa: "migrant" contro "migrator"). Per una
+    keyword di piu parole: non richiede piu che siano una sequenza esatta
+    adiacente (il comportamento precedente) — basta che le radici di
+    tutte le parole della keyword compaiano nel testo entro una finestra
+    di poche parole (`window`) l'una dall'altra, in un ordine qualsiasi.
+    Cosi "lavoro agricolo" trova anche "lavoro nel settore agricolo"."""
+    words = _WORD_RE.findall(keyword.lower())
+    if not words:
+        return False
+
+    positions_per_word = []
+    for word in words:
+        stem = _stem(word)
+        positions = [i for i, tok in enumerate(tokens) if tok.startswith(stem)]
+        if not positions:
+            return False  # una parola della keyword non compare per nulla: nessun match
+        positions_per_word.append(positions)
+
+    if len(positions_per_word) == 1:
+        return True
+
+    # Finestra scorrevole sulla lista di TUTTE le posizioni trovate (di
+    # qualsiasi parola della keyword), ordinate: appena la finestra
+    # contiene almeno una posizione per ciascuna parola, c'e un match.
+    # Evita l'esplosione combinatoria di provare tutte le combinazioni
+    # possibili una per una.
+    events = sorted(
+        (pos, word_idx)
+        for word_idx, positions in enumerate(positions_per_word)
+        for pos in positions
+    )
+    needed = len(positions_per_word)
+    counts = [0] * needed
+    distinct = 0
+    window_events = deque()
+    for pos, word_idx in events:
+        window_events.append((pos, word_idx))
+        if counts[word_idx] == 0:
+            distinct += 1
+        counts[word_idx] += 1
+        while window_events and pos - window_events[0][0] > window:
+            old_pos, old_idx = window_events.popleft()
+            counts[old_idx] -= 1
+            if counts[old_idx] == 0:
+                distinct -= 1
+        if distinct == needed:
+            return True
+    return False
+
+
 def fetch_page_text(url):
     """Scarica il testo "pulito" di una pagina, con un ripiego automatico
     per i siti che rifiutano la richiesta diretta da GitHub Actions (vedi
@@ -741,7 +834,11 @@ def check_watch_pages(keywords, previous_hashes, sources):
             changed = previous_hashes.get(page["id"]) not in (None, content_hash)
             new_hashes[page["id"]] = content_hash
 
-            matched_keywords = [kw for kw in keywords if kw and kw.lower() in text_lower]
+            # Tokenizziamo la pagina UNA sola volta (non ad ogni parola
+            # chiave): keyword_matches_text tollera plurali/varianti e
+            # frasi non adiacenti, vedi il suo commento sopra.
+            page_tokens = _tokenize(text_lower)
+            matched_keywords = [kw for kw in keywords if kw and keyword_matches_text(kw, page_tokens)]
 
             page_status.append({
                 "id": page["id"], "url": page["url"], "funder": page.get("funder", ""), "ok": True,
