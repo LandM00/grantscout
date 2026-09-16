@@ -68,9 +68,27 @@ HTTP_HEADERS = {
     # siti con protezioni anti-bot basiche: molti bloccano di default gli
     # User-Agent che si dichiarano script/bot, anche per un uso legittimo
     # come questo (monitoraggio privato, non commerciale, a bassa frequenza).
+    # Le intestazioni aggiuntive sotto (Accept, Sec-Fetch-*, ecc.) servono
+    # allo stesso scopo: alcune protezioni anti-bot (es. Cloudflare) non
+    # guardano solo lo User-Agent ma l'insieme delle intestazioni tipiche
+    # di una richiesta di navigazione vera -- un browser reale le invia
+    # sempre, uno script che manda solo Host/User-Agent si nota. Non e'
+    # una soluzione garantita (contro una verifica che richiede di
+    # eseguire JavaScript non puo' funzionare, con "requests" non
+    # eseguiamo pagine), ma per blocchi basati solo sulle intestazioni
+    # puo' bastare.
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 HTTP_TIMEOUT = 25
 
