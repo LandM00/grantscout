@@ -1,5 +1,5 @@
 window.FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCtOL_vberMAfHvTuBkVBDThYy9QXtn-LA",
+  apiKey: "AIzaSyCtOL_vberMAfHvTuBkVBDThYy90Xtn-LA",
   authDomain: "agrimigra-watch.firebaseapp.com",
   projectId: "agrimigra-watch",
   storageBucket: "agrimigra-watch.firebasestorage.app",
