@@ -354,7 +354,21 @@ def search_funding_tenders_portal(keywords):
                     "deadlineDate": deadline_date,
                     "tags": ["UE", "Horizon Europe"],
                     "summary": "Trovato tramite ricerca automatica per la parola chiave \"{}\" sul portale Funding & Tenders. Verificare rilevanza e requisiti sulla pagina ufficiale.".format(term),
-                    "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/calls-for-proposals?callIdentifier=" + (identifier or ""),
+                    # ATTENZIONE: lo schema "calls-for-proposals?callIdentifier=..."
+                    # usato qui in precedenza NON porta piu da nessuna parte -- il
+                    # portale (verificato a mano) lo ignora e mostra sempre e solo
+                    # la home page vuota, qualunque identificativo gli si passi.
+                    # Lo schema corretto, verificato sia su bandi Horizon Europe
+                    # aperti che su bandi H2020 chiusi da anni, e
+                    # ".../topic-details/<identifier>". Il campo "url" che l'API
+                    # stessa a volte restituisce non e affidabile allo stesso modo:
+                    # per i bandi piu vecchi punta a un endpoint JSON grezzo (non a
+                    # una pagina leggibile), quindi costruiamo il link noi.
+                    "url": (
+                        "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/" + identifier
+                        if identifier else
+                        "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home"
+                    ),
                     "source": "funding-tenders-api",
                 })
         except Exception as exc:  # noqa: BLE001 — vogliamo continuare comunque
