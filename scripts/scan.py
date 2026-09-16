@@ -634,13 +634,37 @@ def prune_stale_horizon_calls(db, current_ids):
 
 
 def upsert_calls(db, items):
+    """Scrive/aggiorna i bandi in Firestore (merge=True: aggiorna solo i
+    campi presenti, senza cancellare il resto del documento).
+
+    "foundAt" (la data di "trovato il" mostrata nell'app) va scritta SOLO
+    la prima volta che un bando viene visto: prima leggiamo quali id tra
+    quelli di questa scansione esistono gia, e per quelli NON includiamo
+    "foundAt" nell'aggiornamento -- con merge=True questo lascia il valore
+    gia salvato invariato. Prima invece veniva sovrascritta ad ogni
+    scansione anche per i bandi gia noti, quindi "trovato il" mostrava
+    sempre la data dell'ultima scansione invece della prima."""
     if not items:
         return 0
+
+    doc_ids = [item["id"] for item in items]
+    existing_ids = set()
+    # Una sola tornata di letture (invece di una query per id) per sapere
+    # quali bandi esistono gia. get_all non ha il limite di 500 dei batch
+    # di scrittura, ma per sicurezza leggiamo comunque a blocchi.
+    for start in range(0, len(doc_ids), 300):
+        chunk = doc_ids[start:start + 300]
+        refs = [db.collection("calls").document(doc_id) for doc_id in chunk]
+        for snapshot in db.get_all(refs):
+            if snapshot.exists:
+                existing_ids.add(snapshot.id)
+
     batch = db.batch()
     count = 0
     for item in items:
         doc_id = item.pop("id")
-        item["foundAt"] = now_iso()
+        if doc_id not in existing_ids:
+            item["foundAt"] = now_iso()
         batch.set(db.collection("calls").document(doc_id), item, merge=True)
         count += 1
         if count % 400 == 0:  # limite batch Firestore
