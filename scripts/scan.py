@@ -354,9 +354,19 @@ def search_funding_tenders_portal(keywords):
     che in pratica non succede mai — il risultato sarebbe sempre zero anche
     quando ci sono bandi pertinenti. Cercandole una per volta e unendo i
     risultati (senza doppioni), basta che una call contenga anche solo una
-    delle parole chiave per comparire."""
-    results = []
-    seen_ids = set()
+    delle parole chiave per comparire.
+
+    Un bando trovato tramite PIÙ parole chiave diverse (es. sia
+    "migrazione" che "agricoltura") è un segnale più forte di uno trovato
+    tramite una sola parola generica: per questo non ci fermiamo alla
+    prima parola chiave che lo trova (comportamento precedente — la
+    seconda occorrenza dello stesso bando veniva scartata come doppione
+    senza lasciare traccia), ma accumuliamo TUTTE le parole chiave che
+    hanno prodotto ciascun bando, in `matched_terms_by_id`, e la usiamo
+    sia per il testo del riepilogo sia per il punteggio di rilevanza
+    (vedi compute_match_score)."""
+    items_by_id = {}
+    matched_terms_by_id = {}
     errors = []
     url = "https://api.tech.ec.europa.eu/search-api/prod/rest/search"
     terms = [k for k in (keywords or []) if k][:6] or ["migration", "agriculture"]
@@ -396,10 +406,12 @@ def search_funding_tenders_portal(keywords):
                 identifier = _first(fields, ["identifier", "callIdentifier", "reference"])
                 deadline_date = _parse_date(_first(fields, ["deadlineDate", "deadline"]))
                 item_id = "horizon-" + slugify(identifier or title)
-                if item_id in seen_ids:
-                    continue
-                seen_ids.add(item_id)
-                results.append({
+                found_terms = matched_terms_by_id.setdefault(item_id, [])
+                if term not in found_terms:
+                    found_terms.append(term)
+                if item_id in items_by_id:
+                    continue  # titolo/scadenza/etc. già salvati: qui serviva solo registrare il termine
+                items_by_id[item_id] = {
                     "id": item_id,
                     "title": title if not identifier else "{} ({})".format(title, identifier),
                     "funder": "Commissione Europea — Horizon Europe / Funding & Tenders Portal",
@@ -410,7 +422,6 @@ def search_funding_tenders_portal(keywords):
                     "status": status_from_deadline(deadline_date),
                     "deadlineDate": deadline_date,
                     "tags": ["UE", "Horizon Europe"],
-                    "summary": "Trovato tramite ricerca automatica per la parola chiave \"{}\" sul portale Funding & Tenders. Verificare rilevanza e requisiti sulla pagina ufficiale.".format(term),
                     # ATTENZIONE: lo schema "calls-for-proposals?callIdentifier=..."
                     # usato qui in precedenza NON porta piu da nessuna parte -- il
                     # portale (verificato a mano) lo ignora e mostra sempre e solo
@@ -427,10 +438,36 @@ def search_funding_tenders_portal(keywords):
                         "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home"
                     ),
                     "source": "funding-tenders-api",
-                })
+                }
         except Exception as exc:  # noqa: BLE001 — vogliamo continuare comunque
             print("Avviso: ricerca su Funding & Tenders Portal per \"{}\" non riuscita ({}). Salto questo termine.".format(term, exc))
             errors.append({"term": term, "error": str(exc)})
+
+    # Solo ora, con TUTTE le parole chiave di ciascun bando raccolte,
+    # calcoliamo punteggio ed etichetta di rilevanza e componiamo il
+    # riepilogo finale (elenca tutte le parole chiave trovate, non solo
+    # la prima incontrata).
+    results = []
+    for item_id, item in items_by_id.items():
+        found_terms = matched_terms_by_id.get(item_id, [])
+        match_score = compute_match_score(found_terms)
+        relevance_tag = relevance_label(match_score)
+        if relevance_tag:
+            item["tags"] = item["tags"] + [relevance_tag]
+        item["matchScore"] = match_score
+        if len(found_terms) == 1:
+            item["summary"] = (
+                "Trovato tramite ricerca automatica per la parola chiave \"{}\" sul portale "
+                "Funding & Tenders. Verificare rilevanza e requisiti sulla pagina ufficiale."
+            ).format(found_terms[0])
+        else:
+            quoted = ", ".join('"{}"'.format(t) for t in found_terms)
+            item["summary"] = (
+                "Trovato tramite ricerca automatica per {} parole chiave ({}) sul portale "
+                "Funding & Tenders. Verificare rilevanza e requisiti sulla pagina ufficiale."
+            ).format(len(found_terms), quoted)
+        results.append(item)
+
     stats = {
         "termsTotal": len(terms),
         "termsFailed": len(errors),
@@ -782,6 +819,46 @@ def keyword_matches_text(keyword, tokens, window=6):
     return False
 
 
+def _keyword_weight(keyword):
+    """Una parola chiave di più parole (es. "agricoltura sostenibile") è
+    una frase specifica: trovarla nel testo è un segnale più forte di
+    trovare una singola parola molto comune isolata (es. "agricoltura" da
+    sola, che compare quasi ovunque su un sito ministeriale — vero anche
+    per la sua traduzione "agriculture"). Il peso è semplicemente il
+    numero di parole della keyword, così una frase di due parole conta il
+    doppio di una parola singola."""
+    words = _WORD_RE.findall(keyword.lower())
+    return len(words) if words else 1
+
+
+def compute_match_score(matched_keywords):
+    """Punteggio grezzo di rilevanza per una segnalazione: somma dei pesi
+    di TUTTE le parole chiave (comprese le traduzioni/varianti) che hanno
+    trovato un riscontro, non solo "c'è o non c'è" un match. Più parole
+    chiave diverse confermano lo stesso argomento, o più sono frasi
+    specifiche invece di parole generiche isolate, più alto il
+    punteggio — usato per ordinare le segnalazioni e per mostrare
+    all'utente quanto fidarsi di ciascuna a colpo d'occhio, senza dover
+    aprire ogni bando per scoprirlo."""
+    return sum(_keyword_weight(kw) for kw in matched_keywords if kw)
+
+
+def relevance_label(score):
+    """Etichetta leggibile del punteggio, mostrata come tag nell'app.
+    Punteggio 0 (nessuna parola chiave trovata — es. una pagina monitorata
+    segnalata solo perché il contenuto è cambiato) non riceve etichetta:
+    non è un giudizio "debole", è semplicemente l'assenza di un segnale
+    basato su parole chiave, e va trattato diversamente da un match
+    debole vero e proprio."""
+    if score <= 0:
+        return None
+    if score == 1:
+        return "corrispondenza debole"
+    if score <= 3:
+        return "corrispondenza media"
+    return "corrispondenza forte"
+
+
 def fetch_page_text(url):
     """Scarica il testo "pulito" di una pagina, con un ripiego automatico
     per i siti che rifiutano la richiesta diretta da GitHub Actions (vedi
@@ -854,6 +931,16 @@ def check_watch_pages(keywords, previous_hashes, sources):
                 note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
             summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
 
+            # Punteggio di rilevanza: 0 se il "segnale" è solo il
+            # cambiamento di contenuto (nessuna parola chiave — spesso
+            # rumore, es. un banner o una data che cambia), altrimenti
+            # cresce con quante/quali parole chiave hanno trovato
+            # riscontro (vedi compute_match_score). Niente etichetta
+            # quando il punteggio è 0: non vogliamo far sembrare "debole"
+            # un segnale che in realtà non ha nessuna parola chiave dietro.
+            match_score = compute_match_score(matched_keywords)
+            relevance_tag = relevance_label(match_score)
+
             results.append({
                 "id": "watch-" + page["id"],
                 "title": page["title"],
@@ -861,8 +948,9 @@ def check_watch_pages(keywords, previous_hashes, sources):
                 "category": page["category"],
                 "status": "watch",
                 "deadlineText": "vedi pagina ufficiale",
-                "tags": ["da verificare"] + (["aggiornata"] if changed else []),
+                "tags": ["da verificare"] + (["aggiornata"] if changed else []) + ([relevance_tag] if relevance_tag else []),
                 "summary": summary,
+                "matchScore": match_score,
                 "url": page["url"],
                 "source": "page-watcher",
             })

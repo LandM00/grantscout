@@ -313,7 +313,15 @@
       if(oa !== ob) return oa - ob;
       var da = a.deadlineDate ? new Date(a.deadlineDate).getTime() : Infinity;
       var db = b.deadlineDate ? new Date(b.deadlineDate).getTime() : Infinity;
-      return da - db;
+      if(da !== db) return da - db;
+      // A parità di scadenza (tipicamente entrambe assenti, come per le
+      // segnalazioni "watch" che non hanno mai una scadenza vera): le
+      // corrispondenze più forti (più parole chiave, o frasi specifiche
+      // invece di parole generiche isolate) salgono in cima, invece di
+      // restare in un ordine arbitrario come prima.
+      var sa = a.matchScore || 0;
+      var sb = b.matchScore || 0;
+      return sb - sa;
     });
   }
 
