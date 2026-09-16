@@ -13,5 +13,5 @@ window.FIREBASE_CONFIG = {
   // richieste che arrivano davvero da questo sito, bloccando bot e script
   // che hanno trovato questa configurazione pubblica (vedi il commento in
   // cima a questo file) e provano a scrivere direttamente nel database.
-  appCheckSiteKey: "INCOLLA_QUI_LA_TUA_RECAPTCHA_V3_SITE_KEY"
+  appCheckSiteKey: "6LesLb8tAAAAAByDblERg7lLuyJlxvR0v-FOVM63"
 };
