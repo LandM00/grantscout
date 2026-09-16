@@ -73,6 +73,11 @@
     border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:20px;
   }
   .banner.show{display:block;}
+  .banner ul{ margin:6px 0 0; padding-left:18px; }
+  .banner li{ margin-bottom:3px; line-height:1.4; }
+  .scan-detail{
+    font-size:12px; color:var(--ink-muted); margin:-16px 0 20px; line-height:1.5;
+  }
   details.settings{
     background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:16px; box-shadow:var(--shadow);
   }
@@ -171,6 +176,8 @@
   </div>
 
   <div class="banner" id="offlineBanner">Impossibile contattare il database in questo momento. Controlla la connessione e ricarica la pagina.</div>
+  <div class="banner" id="healthBanner"></div>
+  <p class="scan-detail" id="scanDetail"></p>
 
   <details class="settings" id="settingsPanel">
     <summary>Impostazioni ricerca <span class="summary-arrow">▸</span></summary>
@@ -343,11 +350,30 @@
     }).catch(function(){ offlineBanner.classList.add("show"); });
   }
 
+  function renderHealthBanner(health){
+    var el = document.getElementById("healthBanner");
+    var issues = (health && health.issues) || [];
+    if(!issues.length){ el.classList.remove("show"); el.innerHTML = ""; return; }
+    el.innerHTML = '<strong>Attenzione — problemi rilevati nell\'ultima scansione:</strong>' +
+      '<ul>' + issues.map(function(msg){ return '<li>' + escapeHtml(msg) + '</li>'; }).join("") + '</ul>' +
+      '<span>Non è un errore tuo: significa che una fonte esterna ha smesso di rispondere come previsto. ' +
+      'Se persiste, la fonte va controllata a mano.</span>';
+    el.classList.add("show");
+  }
+
+  function renderScanDetail(sourcesChecked){
+    var el = document.getElementById("scanDetail");
+    if(!sourcesChecked || !sourcesChecked.length){ el.textContent = ""; return; }
+    el.textContent = sourcesChecked.join(" · ");
+  }
+
   function loadMeta(){
     if(!db) return;
     db.collection("meta").doc("status").get().then(function(snap){
       var data = snap.exists ? snap.data() : {};
       document.getElementById("lastRun").textContent = data.lastRun ? fmtDateTime(data.lastRun) : "non ancora eseguita";
+      renderScanDetail(data.sourcesChecked);
+      renderHealthBanner(data.health);
     }).catch(function(){ offlineBanner.classList.add("show"); });
   }
 

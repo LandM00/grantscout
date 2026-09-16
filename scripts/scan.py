@@ -296,8 +296,13 @@ def slugify(text):
 def search_funding_tenders_portal(keywords):
     """Interroga l'API pubblica (non ufficialmente documentata) del portale
     EU Funding & Tenders per Horizon Europe. Se l'endpoint cambia o non
-    risponde come atteso, la funzione fallisce in modo silenzioso: non deve
-    mai bloccare il resto dello scan.
+    risponde come atteso, la funzione NON deve mai bloccare il resto dello
+    scan — ma a differenza di prima, non si limita più a stampare un
+    avviso nel log: restituisce anche un riepilogo (`stats`) di quante
+    parole chiave sono state cercate con successo e quante hanno fallito,
+    così chi chiama può accorgersi (e mostrare nell'app) quando l'intera
+    fonte è irraggiungibile, invece che confondere un guasto con "nessun
+    risultato nuovo".
 
     Cerca UNA parola chiave alla volta (non tutte insieme come frase unica):
     unirle in un'unica frase tra virgolette richiederebbe che un bando
@@ -308,6 +313,7 @@ def search_funding_tenders_portal(keywords):
     delle parole chiave per comparire."""
     results = []
     seen_ids = set()
+    errors = []
     url = "https://api.tech.ec.europa.eu/search-api/prod/rest/search"
     terms = [k for k in (keywords or []) if k][:6] or ["migration", "agriculture"]
     body = {
@@ -353,8 +359,15 @@ def search_funding_tenders_portal(keywords):
                 })
         except Exception as exc:  # noqa: BLE001 — vogliamo continuare comunque
             print("Avviso: ricerca su Funding & Tenders Portal per \"{}\" non riuscita ({}). Salto questo termine.".format(term, exc))
-    print("Portale Funding & Tenders: {} risultati unici su {} parole chiave cercate.".format(len(results), len(terms)))
-    return results
+            errors.append({"term": term, "error": str(exc)})
+    stats = {
+        "termsTotal": len(terms),
+        "termsFailed": len(errors),
+        "lastErrorSample": errors[0]["error"] if errors else None,
+    }
+    print("Portale Funding & Tenders: {} risultati unici su {} parole chiave cercate ({} fallite).".format(
+        len(results), len(terms), len(errors)))
+    return results, stats
 
 
 def _first(d, keys):
@@ -440,9 +453,17 @@ def check_watch_pages(keywords, previous_hashes, sources):
     """Per ogni pagina in 'sources' (da Firestore): scarica il testo,
     controlla se contiene una delle parole chiave e se il contenuto è
     cambiato rispetto all'ultima esecuzione. Non "capisce" il contenuto:
-    segnala solo dove guardare a mano."""
+    segnala solo dove guardare a mano.
+
+    Oltre ai risultati, restituisce anche `page_status`: un elenco con
+    l'esito (raggiunta o no, ed eventuale errore) di OGNI pagina
+    controllata, indipendentemente dal fatto che abbia prodotto una
+    segnalazione. Serve a chi chiama per distinguere "questa pagina non ha
+    nulla di nuovo" da "questa pagina non si riesce più a raggiungere" —
+    prima quest'ultimo caso spariva silenziosamente in un print nel log."""
     results = []
     new_hashes = dict(previous_hashes)
+    page_status = []
     for page in sources:
         try:
             resp = requests.get(page["url"], headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
@@ -456,6 +477,10 @@ def check_watch_pages(keywords, previous_hashes, sources):
             new_hashes[page["id"]] = content_hash
 
             matched_keywords = [kw for kw in keywords if kw and kw.lower() in text_lower]
+
+            page_status.append({
+                "id": page["id"], "url": page["url"], "funder": page.get("funder", ""), "ok": True,
+            })
 
             if not matched_keywords and not changed:
                 continue  # niente di nuovo da segnalare per questa pagina
@@ -481,7 +506,11 @@ def check_watch_pages(keywords, previous_hashes, sources):
             })
         except Exception as exc:  # noqa: BLE001
             print("Avviso: impossibile controllare {} ({}). Salto.".format(page["url"], exc))
-    return results, new_hashes
+            page_status.append({
+                "id": page["id"], "url": page["url"], "funder": page.get("funder", ""),
+                "ok": False, "error": str(exc),
+            })
+    return results, new_hashes, page_status
 
 
 def upsert_calls(db, items):
@@ -499,6 +528,75 @@ def upsert_calls(db, items):
             batch = db.batch()
     batch.commit()
     return count
+
+
+def compute_health(previous_health, horizon_stats, page_status):
+    """Confronta l'esito di questa scansione con quello delle precedenti
+    (letto da meta/status.health) per distinguere un intoppo isolato da un
+    guasto persistente, e prepara un elenco di messaggi pronti da mostrare
+    nell'app. Un fallimento isolato (una parola chiave o una pagina che
+    non risponde una volta sola) NON genera un avviso: capita, ed è
+    normale per fonti esterne su cui non abbiamo controllo. Un fallimento
+    che si ripete su scansioni consecutive, invece, è il segnale che
+    qualcosa si è rotto davvero (endpoint cambiato, pagina spostata, sito
+    che blocca le richieste) e va segnalato con chiarezza, non solo nel
+    log di GitHub Actions che quasi nessuno controlla a meno che non gli
+    venga detto di farlo."""
+    previous_health = previous_health or {}
+
+    prev_horizon = previous_health.get("horizon") or {}
+    horizon_total_failure = horizon_stats["termsTotal"] > 0 and horizon_stats["termsFailed"] == horizon_stats["termsTotal"]
+    horizon_streak = (prev_horizon.get("consecutiveFailStreak", 0) + 1) if horizon_total_failure else 0
+    horizon_health = {
+        "termsTotal": horizon_stats["termsTotal"],
+        "termsFailed": horizon_stats["termsFailed"],
+        "consecutiveFailStreak": horizon_streak,
+        "lastErrorSample": horizon_stats.get("lastErrorSample"),
+    }
+
+    prev_streaks = ((previous_health.get("watchPages") or {}).get("failStreaks")) or {}
+    new_streaks = {}
+    pages_failed = 0
+    for stat in page_status:
+        if stat["ok"]:
+            continue
+        pages_failed += 1
+        new_streaks[stat["id"]] = prev_streaks.get(stat["id"], 0) + 1
+
+    failing_persistent = []
+    for stat in page_status:
+        streak = new_streaks.get(stat["id"], 0)
+        if streak >= 2:
+            failing_persistent.append({
+                "id": stat["id"], "url": stat["url"], "funder": stat.get("funder", ""),
+                "streak": streak, "lastError": stat.get("error"),
+            })
+
+    watch_pages_health = {
+        "pagesTotal": len(page_status),
+        "pagesFailed": pages_failed,
+        "failStreaks": new_streaks,
+        "failingPersistent": failing_persistent,
+    }
+
+    issues = []
+    if horizon_streak >= 2:
+        issues.append(
+            "Horizon Europe / Funding & Tenders Portal non è raggiungibile da {} scansioni consecutive "
+            "(ultimo errore: {}).".format(horizon_streak, horizon_health["lastErrorSample"] or "sconosciuto")
+        )
+    for p in failing_persistent:
+        issues.append(
+            "Pagina monitorata non raggiungibile da {} scansioni consecutive: {} ({}).".format(
+                p["streak"], p["funder"] or p["url"], p["url"])
+        )
+
+    return {
+        "horizon": horizon_health,
+        "watchPages": watch_pages_health,
+        "issues": issues,
+        "hasPersistentIssues": bool(issues),
+    }
 
 
 def close_expired_calls(db):
@@ -548,13 +646,26 @@ def main():
     sources_checked = []
     all_new_items = []
 
-    horizon_items = search_funding_tenders_portal(search_keywords)
-    sources_checked.append("Horizon Europe / Funding & Tenders Portal ({} risultati)".format(len(horizon_items)))
+    horizon_items, horizon_stats = search_funding_tenders_portal(search_keywords)
+    sources_checked.append(
+        "Horizon Europe / Funding & Tenders Portal: {} risultati ({}/{} parole chiave riuscite)".format(
+            len(horizon_items), horizon_stats["termsTotal"] - horizon_stats["termsFailed"], horizon_stats["termsTotal"])
+    )
     all_new_items.extend(horizon_items)
 
-    watch_items, new_hashes = check_watch_pages(search_keywords, previous_hashes, sources)
-    sources_checked.append("Pagine monitorate (configurabili in Firestore): {} segnalazioni su {}".format(len(watch_items), len(sources)))
+    watch_items, new_hashes, page_status = check_watch_pages(search_keywords, previous_hashes, sources)
+    pages_ok = sum(1 for p in page_status if p["ok"])
+    sources_checked.append(
+        "Pagine monitorate (configurabili in Firestore): {} segnalazioni — {}/{} pagine raggiunte".format(
+            len(watch_items), pages_ok, len(page_status))
+    )
     all_new_items.extend(watch_items)
+
+    health = compute_health(meta.get("health"), horizon_stats, page_status)
+    if health["issues"]:
+        print("ATTENZIONE — problemi persistenti rilevati:")
+        for issue in health["issues"]:
+            print("  - " + issue)
 
     # Prima si scrivono i nuovi risultati, POI si chiudono le call scadute:
     # così una call trovata solo ora ma con scadenza già passata (capita con
@@ -567,6 +678,7 @@ def main():
         "lastRun": now_iso(),
         "sourcesChecked": sources_checked,
         "pageHashes": new_hashes,
+        "health": health,
         "notes": "{} voci scritte/aggiornate, {} bandi contrassegnati come scaduti.".format(written, closed_count),
     }, merge=True)
 
