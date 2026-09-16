@@ -1,4 +1,12 @@
 rules_version = '2';
+// NOTA: queste regole restano permissive di proposito ("if true" su
+// config/admin/sources) -- la protezione da bot e script che trovano la
+// configurazione Firebase pubblica (vedi docs/firebase-config.js) non e
+// qui, ma in Firebase App Check (vedi SETUP.md, sezione "Blocca bot e
+// script con Firebase App Check"): una volta attivato e messo in modalita
+// "Applica" per Cloud Firestore, solo le richieste che arrivano davvero
+// dal sito vengono accettate, qualunque cosa dicano queste regole. Non
+// modifica il testo delle regole: agisce prima, a livello di richiesta.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -22,6 +30,22 @@ service cloud.firestore {
     match /calls/{doc} {
       allow read: if true;
       allow write: if false;
+    }
+
+    // Il pulsante "Ricomincia da zero" nell'app scrive qui per chiedere
+    // allo scraper di svuotare i bandi trovati al prossimo giro.
+    match /admin/reset {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Elenco delle pagine monitorate: leggibile e modificabile dall'app
+    // (stessa logica delle impostazioni sopra -- nessun login, adatto a
+    // uso privato con URL non pubblicizzato). Lo scraper le legge tramite
+    // la Admin SDK, che ignora comunque queste regole.
+    match /sources/{doc} {
+      allow read: if true;
+      allow write: if true;
     }
   }
 }

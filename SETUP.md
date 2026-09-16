@@ -102,6 +102,52 @@ Gli basta il link di GitHub Pages: lo apre, lo installa sul telefono con
 gli stessi passaggi del punto 11, e da lì può modificare parole chiave e
 frequenza e guardare i bandi trovati — nessun account richiesto per usarla.
 
+## 13. (Consigliato) Blocca bot e script con Firebase App Check
+
+Le regole di Firestore (`firestore.rules`) lasciano scrivibili senza login
+`config/main`, `admin/reset` e `sources` — scelta voluta per restare senza
+account, ma sfruttabile da un bot che trova la configurazione pubblica
+dell'app (`docs/firebase-config.js` è per forza pubblico, è dentro il sito
+e dentro il repository) e scrive direttamente nel database senza passare
+dal sito. Questo passo chiude quel buco senza aggiungere alcun login:
+Firebase App Check accetta solo le richieste che arrivano davvero dal tuo
+sito, verificato in automatico in background da reCAPTCHA v3 (nessun
+captcha visibile a te o a tuo fratello).
+
+**Limite onesto**: protegge dai bot/script automatici, non da una persona
+che apre il tuo sito vero e preme i pulsanti — un rischio comunque basso
+per un progetto privato con URL non pubblicizzato.
+
+1. Vai su <https://www.google.com/recaptcha/admin/create> ed entra con un
+   account Google (puoi usare lo stesso di Firebase).
+2. Dai un'etichetta qualsiasi (es. il nome del tuo progetto), scegli
+   **reCAPTCHA v3**, e in "Domini" aggiungi l'indirizzo del tuo sito senza
+   `https://` (es. `tuo-utente.github.io` — se in futuro aggiungi un
+   dominio personalizzato, aggiungi anche quello).
+3. Invia. Nella pagina successiva copia la **Chiave del sito** (site key,
+   NON la "chiave segreta" — quella non serve qui).
+4. Su Firebase Console: **Build → App Check** → **Registra** l'app web →
+   scegli **reCAPTCHA v3** come provider → incolla la site key del passo 3.
+5. Apri `docs/firebase-config.js` e incolla la stessa site key al posto del
+   segnaposto `appCheckSiteKey`.
+6. Fai commit e push (o carica il file aggiornato) e aspetta che GitHub
+   Pages pubblichi la nuova versione (1-2 minuti). Apri il sito e controlla
+   la console del browser (F12): non devono comparire errori relativi ad
+   App Check.
+7. Su Firebase Console, **App Check → scheda "API"**: per qualche giorno
+   lascia **Cloud Firestore** in modalità di sola osservazione (non
+   ancora "Applica") — così vedi quante richieste arriverebbero bloccate
+   prima di attivare il blocco vero, ed eviti di chiuderti fuori dalla tua
+   stessa app per un errore di configurazione.
+8. Quando sei tranquillo che le richieste del tuo sito risultano
+   "verificate", torna su **App Check → API → Cloud Firestore** e passa a
+   **Applica**. Da quel momento le richieste che non arrivano dal tuo sito
+   vengono rifiutate, comprese quelle a `config/main`, `admin/reset` e
+   `sources` anche se le regole restano permissive.
+
+Se non completi questo passo, l'app continua a funzionare esattamente come
+prima — semplicemente resta senza questa protezione aggiuntiva.
+
 ---
 
 ## Limiti da conoscere (onestà prima di tutto)

@@ -247,6 +247,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
 (function(){
@@ -333,6 +334,24 @@
   var app, db;
   try{
     app = firebase.initializeApp(window.FIREBASE_CONFIG);
+
+    // App Check (facoltativo, vedi firebase-config.js e SETUP.md): dice a
+    // Firestore di accettare solo le richieste che arrivano davvero da
+    // questo sito, verificato in automatico da reCAPTCHA v3 in background
+    // (nessun captcha visibile). Finche appCheckSiteKey resta il valore
+    // segnaposto, questo blocco non fa nulla e l'app si comporta come
+    // prima. Avvolto in un try/catch a parte: un problema qui (chiave non
+    // valida, script bloccato da un ad-blocker) non deve impedire il resto
+    // dell'app di partire.
+    var siteKey = window.FIREBASE_CONFIG.appCheckSiteKey;
+    if(siteKey && siteKey.indexOf("INCOLLA_QUI") !== 0){
+      try{
+        firebase.appCheck().activate(siteKey, true);
+      }catch(appCheckErr){
+        console.warn("App Check non attivato:", appCheckErr);
+      }
+    }
+
     db = firebase.firestore();
   }catch(e){
     document.getElementById("offlineBanner").classList.add("show");
