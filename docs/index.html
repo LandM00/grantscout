@@ -396,8 +396,9 @@
       auth.signInWithEmailAndPassword(LOGIN_EMAIL, pin).then(function(){
         pinInput.value = "";
         unlockBtn.disabled = false;
-      }).catch(function(){
-        unlockMsg.textContent = "Codice errato, riprova.";
+      }).catch(function(err){
+        console.error("Errore sblocco:", err);
+        unlockMsg.textContent = "Codice errato, riprova. (dettaglio: " + (err && err.code ? err.code : err) + ")";
         unlockBtn.disabled = false;
       });
     });
