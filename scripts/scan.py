@@ -92,6 +92,31 @@ HTTP_HEADERS = {
 }
 HTTP_TIMEOUT = 25
 
+# Servizio di terze parti (gratuito) usato come RIPIEGO quando una pagina
+# monitorata rifiuta la richiesta diretta da GitHub Actions. Scarica la
+# pagina con un proprio browser headless, quindi con un proprio indirizzo
+# IP (diverso da quello di GitHub Actions), e restituisce il contenuto
+# già ripulito in testo/Markdown.
+#
+# Verificato a mano (settembre 2026):
+#   - interregeurope.eu: la richiesta diretta da 403 (blocco anti-bot),
+#     ma passando da questo servizio il contenuto si scarica bene. Il
+#     fallback qui sotto risolve quindi questo caso.
+#   - regione.puglia.it: la richiesta diretta va in timeout (ConnectTimeout)
+#     da GitHub Actions. Anche passando da questo servizio, pero, la
+#     richiesta va comunque in timeout -- persino su un file statico senza
+#     JavaScript come /robots.txt. Questo indica che il blocco non e
+#     "anti-bot" contro uno script che si dichiara tale, ma un blocco piu
+#     ampio, a livello di rete, contro gli indirizzi IP dei provider cloud
+#     in generale (comune per molti siti della pubblica amministrazione
+#     italiana): sia GitHub Actions sia questo servizio girano su
+#     infrastrutture cloud, quindi finiscono entrambi bloccati allo stesso
+#     modo. Per questo caso non risulta esistere un modo gratuito di
+#     aggirare il blocco: servirebbe un proxy con indirizzo IP
+#     residenziale, che e un servizio a pagamento.
+JINA_READER_PREFIX = "https://r.jina.ai/"
+JINA_TIMEOUT = 45  # piu lento della richiesta diretta: usa un browser headless vero
+
 # Elenco di default delle pagine istituzionali da controllare, usato SOLO
 # per popolare la collection Firestore "sources" la prima volta (se vuota).
 # Da lì in poi l'elenco effettivo si modifica in Firestore, non qui.
@@ -494,6 +519,35 @@ def expand_keywords_with_translation(keywords):
     return expanded
 
 
+def fetch_page_text(url):
+    """Scarica il testo "pulito" di una pagina, con un ripiego automatico
+    per i siti che rifiutano la richiesta diretta da GitHub Actions (vedi
+    commento su JINA_READER_PREFIX piu sopra per i dettagli e i limiti).
+
+    Prova prima la richiesta diretta (comportamento normale, invariato).
+    Solo se fallisce, prova il servizio di ripiego. Se falliscono
+    entrambe, solleva l'eccezione della richiesta DIRETTA (piu utile per
+    capire la causa reale -- es. 403 vs timeout -- di quella del ripiego)."""
+    try:
+        resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        text = resp.text
+        if BeautifulSoup is not None:
+            text = BeautifulSoup(resp.text, "html.parser").get_text(" ", strip=True)
+        return text
+    except Exception as direct_exc:  # noqa: BLE001
+        try:
+            fallback_resp = requests.get(
+                JINA_READER_PREFIX + url,
+                headers={"x-timeout": "30"},
+                timeout=JINA_TIMEOUT,
+            )
+            fallback_resp.raise_for_status()
+            return fallback_resp.text
+        except Exception:  # noqa: BLE001
+            raise direct_exc
+
+
 def check_watch_pages(keywords, previous_hashes, sources):
     """Per ogni pagina in 'sources' (da Firestore): scarica il testo,
     controlla se contiene una delle parole chiave e se il contenuto è
@@ -511,11 +565,7 @@ def check_watch_pages(keywords, previous_hashes, sources):
     page_status = []
     for page in sources:
         try:
-            resp = requests.get(page["url"], headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
-            resp.raise_for_status()
-            text = resp.text
-            if BeautifulSoup is not None:
-                text = BeautifulSoup(resp.text, "html.parser").get_text(" ", strip=True)
+            text = fetch_page_text(page["url"])
             text_lower = text.lower()
             content_hash = hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()
             changed = previous_hashes.get(page["id"]) not in (None, content_hash)
