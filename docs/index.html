@@ -182,6 +182,16 @@
   <details class="settings" id="settingsPanel">
     <summary>Impostazioni ricerca <span class="summary-arrow">▸</span></summary>
     <div class="settings-body">
+      <div class="field" id="unlockBox">
+        <label for="pinInput">Codice di accesso per modificare</label>
+        <div class="settings-actions">
+          <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="pinInput" placeholder="Codice a 6 cifre" style="max-width:160px;">
+          <button class="save" id="unlockBtn" type="button">Sblocca</button>
+          <button class="reset" id="lockBtn" type="button" style="display:none;">Blocca</button>
+          <span class="save-msg" id="unlockMsg"></span>
+        </div>
+        <p class="field-help">Serve solo per modificare parole chiave, fonti o svuotare i bandi trovati: la consultazione dei bandi resta sempre libera per chiunque abbia il link.</p>
+      </div>
       <div class="field">
         <label for="kwInput">Parole chiave (separate da virgola)</label>
         <textarea id="kwInput" spellcheck="false" placeholder="migrazione, lavoro agricolo, migrant labour agriculture"></textarea>
@@ -247,7 +257,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
 (function(){
@@ -331,28 +341,15 @@
     el.innerHTML = sortCalls(list).map(renderCard).join("");
   }
 
-  var app, db;
+  var app, db, auth;
+  // Email fissa usata solo internamente per il login con codice numerico
+  // (vedi SETUP.md, sezione "Proteggi le modifiche con un codice di
+  // accesso"): non e una casella email vera, nessuno la vede o la usa.
+  var LOGIN_EMAIL = "accesso@grantscout-app.invalid";
   try{
     app = firebase.initializeApp(window.FIREBASE_CONFIG);
-
-    // App Check (facoltativo, vedi firebase-config.js e SETUP.md): dice a
-    // Firestore di accettare solo le richieste che arrivano davvero da
-    // questo sito, verificato in automatico da reCAPTCHA v3 in background
-    // (nessun captcha visibile). Finche appCheckSiteKey resta il valore
-    // segnaposto, questo blocco non fa nulla e l'app si comporta come
-    // prima. Avvolto in un try/catch a parte: un problema qui (chiave non
-    // valida, script bloccato da un ad-blocker) non deve impedire il resto
-    // dell'app di partire.
-    var siteKey = window.FIREBASE_CONFIG.appCheckSiteKey;
-    if(siteKey && siteKey.indexOf("INCOLLA_QUI") !== 0){
-      try{
-        firebase.appCheck().activate(siteKey, true);
-      }catch(appCheckErr){
-        console.warn("App Check non attivato:", appCheckErr);
-      }
-    }
-
     db = firebase.firestore();
+    auth = firebase.auth();
   }catch(e){
     document.getElementById("offlineBanner").classList.add("show");
     document.getElementById("offlineBanner").textContent = "Configurazione Firebase mancante o non valida: apri public/firebase-config.js e inserisci i dati del tuo progetto (vedi SETUP.md).";
@@ -365,6 +362,52 @@
   var refreshBtn = document.getElementById("refreshBtn");
   var refreshMsg = document.getElementById("refreshMsg");
   var offlineBanner = document.getElementById("offlineBanner");
+
+  var pinInput = document.getElementById("pinInput");
+  var unlockBtn = document.getElementById("unlockBtn");
+  var lockBtn = document.getElementById("lockBtn");
+  var unlockMsg = document.getElementById("unlockMsg");
+
+  function isUnlocked(){ return !!(auth && auth.currentUser); }
+
+  function requireUnlock(msgEl){
+    if(isUnlocked()) return true;
+    if(msgEl) msgEl.textContent = "Devi prima inserire il codice di accesso qui sopra.";
+    var box = document.getElementById("unlockBox");
+    if(box && box.scrollIntoView) box.scrollIntoView({behavior:"smooth", block:"center"});
+    return false;
+  }
+
+  if(auth){
+    auth.onAuthStateChanged(function(user){
+      if(pinInput) pinInput.style.display = user ? "none" : "";
+      if(unlockBtn) unlockBtn.style.display = user ? "none" : "";
+      if(lockBtn) lockBtn.style.display = user ? "" : "none";
+      if(unlockMsg) unlockMsg.textContent = user ? "Sbloccato: puoi modificare." : "";
+    });
+  }
+
+  if(unlockBtn){
+    unlockBtn.addEventListener("click", function(){
+      if(!auth) return;
+      var pin = (pinInput.value || "").trim();
+      if(pin.length < 6){ unlockMsg.textContent = "Il codice deve avere 6 cifre."; return; }
+      unlockBtn.disabled = true; unlockMsg.textContent = "Verifica in corso…";
+      auth.signInWithEmailAndPassword(LOGIN_EMAIL, pin).then(function(){
+        pinInput.value = "";
+        unlockBtn.disabled = false;
+      }).catch(function(){
+        unlockMsg.textContent = "Codice errato, riprova.";
+        unlockBtn.disabled = false;
+      });
+    });
+  }
+
+  if(lockBtn){
+    lockBtn.addEventListener("click", function(){
+      if(auth) auth.signOut();
+    });
+  }
 
   function loadConfig(){
     if(!db) return;
@@ -466,6 +509,7 @@
     sourcesList.addEventListener("click", function(ev){
       var btn = ev.target.closest ? ev.target.closest(".source-remove") : null;
       if(!btn || !db) return;
+      if(!requireUnlock(null)){ window.alert("Devi prima inserire il codice di accesso in \"Impostazioni ricerca\" per rimuovere una fonte."); return; }
       var id = btn.getAttribute("data-id");
       var ok = window.confirm("Rimuovere questa fonte dal monitoraggio? Non tocca i bandi già trovati.");
       if(!ok) return;
@@ -480,6 +524,7 @@
   if(addSourceBtn){
     addSourceBtn.addEventListener("click", function(){
       if(!db) return;
+      if(!requireUnlock(sourceMsg)) return;
       var lines = sourceInput.value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
       if(!lines.length){ sourceMsg.textContent = "Scrivi almeno una fonte prima di aggiungere."; return; }
       var entries = lines.map(function(line){
@@ -514,6 +559,7 @@
   if(saveBtn){
     saveBtn.addEventListener("click", function(){
       if(!db) return;
+      if(!requireUnlock(saveMsg)) return;
       var keywords = kwInput.value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
       var frequency = freqInput.value;
       saveBtn.disabled = true; saveMsg.textContent = "Salvataggio…";
@@ -536,6 +582,7 @@
   if(resetBtn){
     resetBtn.addEventListener("click", function(){
       if(!db) return;
+      if(!requireUnlock(resetMsg)) return;
       var ok = window.confirm("Sicuro di voler eliminare TUTTI i bandi trovati finora? Non si può annullare. Le impostazioni (parole chiave, frequenza) restano invariate.");
       if(!ok) return;
       resetBtn.disabled = true; resetMsg.textContent = "Richiesta inviata…";

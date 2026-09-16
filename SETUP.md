@@ -23,10 +23,11 @@ Google (per Firebase) e un account GitHub (dici di averlo già).
    tutto il contenuto e incollalo al posto di quello presente.
 3. Clicca **Pubblica**.
 
-Queste regole dicono: chiunque abbia il link può leggere tutto e modificare
-le impostazioni (parole chiave/frequenza); nessuno tranne lo scraper può
-scrivere i risultati dei bandi — così l'app resta semplice da usare (nessun
-login) ma i dati raccolti non possono essere alterati da un visitatore.
+Queste regole dicono: chiunque abbia il link può leggere tutto; per
+modificare le impostazioni (parole chiave, fonti, o svuotare i bandi
+trovati) serve il codice di accesso spiegato al punto 13, quindi l'app
+resta consultabile da chiunque ma solo chi conosce il codice può cambiare
+qualcosa. Nessuno tranne lo scraper può scrivere i risultati dei bandi.
 
 ## 4. Registra un'app web e prendi la configurazione
 
@@ -102,51 +103,50 @@ Gli basta il link di GitHub Pages: lo apre, lo installa sul telefono con
 gli stessi passaggi del punto 11, e da lì può modificare parole chiave e
 frequenza e guardare i bandi trovati — nessun account richiesto per usarla.
 
-## 13. (Consigliato) Blocca bot e script con Firebase App Check
+## 13. Proteggi le modifiche con un codice di accesso
 
-Le regole di Firestore (`firestore.rules`) lasciano scrivibili senza login
-`config/main`, `admin/reset` e `sources` — scelta voluta per restare senza
-account, ma sfruttabile da un bot che trova la configurazione pubblica
-dell'app (`docs/firebase-config.js` è per forza pubblico, è dentro il sito
-e dentro il repository) e scrive direttamente nel database senza passare
-dal sito. Questo passo chiude quel buco senza aggiungere alcun login:
-Firebase App Check accetta solo le richieste che arrivano davvero dal tuo
-sito, verificato in automatico in background da reCAPTCHA v3 (nessun
-captcha visibile a te o a tuo fratello).
+Le regole di Firestore (`firestore.rules`) ora permettono a chiunque abbia
+il link di leggere i bandi, ma per modificare qualcosa (parole chiave,
+fonti monitorate, o il pulsante "Ricomincia da zero") serve un codice a 6
+cifre che scegli tu. Chi ha solo il link può guardare i bandi ma non
+toccare nulla; chi conosce anche il codice può modificare — senza dover
+creare un account, inserire un'email o ricordare una password vera.
 
-**Limite onesto**: protegge dai bot/script automatici, non da una persona
-che apre il tuo sito vero e preme i pulsanti — un rischio comunque basso
-per un progetto privato con URL non pubblicizzato.
+Tecnicamente il codice sblocca un accesso Firebase dedicato (Firebase
+Authentication, email/password), ma questo resta invisibile a chi usa
+l'app: vede solo un campo "Codice a 6 cifre" e un pulsante "Sblocca".
 
-1. Vai su <https://www.google.com/recaptcha/admin/create> ed entra con un
-   account Google (puoi usare lo stesso di Firebase).
-2. Dai un'etichetta qualsiasi (es. il nome del tuo progetto), scegli
-   **reCAPTCHA v3**, e in "Domini" aggiungi l'indirizzo del tuo sito senza
-   `https://` (es. `tuo-utente.github.io` — se in futuro aggiungi un
-   dominio personalizzato, aggiungi anche quello).
-3. Invia. Nella pagina successiva copia la **Chiave del sito** (site key,
-   NON la "chiave segreta" — quella non serve qui).
-4. Su Firebase Console: **Build → App Check** → **Registra** l'app web →
-   scegli **reCAPTCHA v3** come provider → incolla la site key del passo 3.
-5. Apri `docs/firebase-config.js` e incolla la stessa site key al posto del
-   segnaposto `appCheckSiteKey`.
-6. Fai commit e push (o carica il file aggiornato) e aspetta che GitHub
-   Pages pubblichi la nuova versione (1-2 minuti). Apri il sito e controlla
-   la console del browser (F12): non devono comparire errori relativi ad
-   App Check.
-7. Su Firebase Console, **App Check → scheda "API"**: per qualche giorno
-   lascia **Cloud Firestore** in modalità di sola osservazione (non
-   ancora "Applica") — così vedi quante richieste arriverebbero bloccate
-   prima di attivare il blocco vero, ed eviti di chiuderti fuori dalla tua
-   stessa app per un errore di configurazione.
-8. Quando sei tranquillo che le richieste del tuo sito risultano
-   "verificate", torna su **App Check → API → Cloud Firestore** e passa a
-   **Applica**. Da quel momento le richieste che non arrivano dal tuo sito
-   vengono rifiutate, comprese quelle a `config/main`, `admin/reset` e
-   `sources` anche se le regole restano permissive.
+1. Su Firebase Console, nel menu a sinistra vai su **Build →
+   Authentication** (se è la prima volta, clicca "Inizia").
+2. Scheda **Sign-in method** → clicca **Email/Password** → attivalo
+   (basta il primo interruttore) → Salva.
+3. Scheda **Users** → **Aggiungi utente**.
+4. Come email metti un indirizzo qualsiasi non tuo, ad esempio
+   `accesso@grantscout-app.invalid` (non deve esistere davvero: serve solo
+   come "nome utente" interno, non userà una vera casella email).
+5. Come password scegli le **6 cifre** che vuoi usare come codice di
+   accesso (es. `482913`) — Firebase richiede almeno 6 caratteri, quindi
+   niente codici più corti.
+6. Se hai usato un'email diversa da quella dell'esempio al passo 4, apri
+   `docs/index.html`, cerca la riga `var LOGIN_EMAIL = ...` e sostituisci
+   l'indirizzo con quello che hai usato (il codice invece non va scritto
+   da nessuna parte nel codice: lo digiti tu, o chi condividi l'app, ogni
+   volta che serve).
+7. Torna alla scheda **Regole** di Firestore Database e incolla di nuovo
+   il contenuto di `firestore.rules` di questo progetto (è cambiato:
+   adesso richiede il codice per scrivere) → **Pubblica**.
+8. Apri il sito, vai su "Impostazioni ricerca", inserisci il codice nel
+   campo "Codice di accesso per modificare" e premi **Sblocca**: se tutto
+   è a posto, il messaggio diventa "Sbloccato: puoi modificare" e puoi
+   salvare le impostazioni normalmente.
+9. Condividi il codice con chi vuoi che possa modificare (a voce, o in un
+   messaggio privato) — non va mai scritto sul sito stesso o in un posto
+   pubblico.
 
-Se non completi questo passo, l'app continua a funzionare esattamente come
-prima — semplicemente resta senza questa protezione aggiuntiva.
+Il codice resta valido finché non lo cambi tu (rifacendo i passi 3-5 con
+una password diversa, oppure eliminando e ricreando l'utente). Ogni
+browser resta sbloccato finché non premi "Blocca" o cancelli i dati del
+sito, poi richiederà di nuovo il codice.
 
 ---
 

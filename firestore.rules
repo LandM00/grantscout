@@ -1,21 +1,18 @@
 rules_version = '2';
-// NOTA: queste regole restano permissive di proposito ("if true" su
-// config/admin/sources) -- la protezione da bot e script che trovano la
-// configurazione Firebase pubblica (vedi docs/firebase-config.js) non e
-// qui, ma in Firebase App Check (vedi SETUP.md, sezione "Blocca bot e
-// script con Firebase App Check"): una volta attivato e messo in modalita
-// "Applica" per Cloud Firestore, solo le richieste che arrivano davvero
-// dal sito vengono accettate, qualunque cosa dicano queste regole. Non
-// modifica il testo delle regole: agisce prima, a livello di richiesta.
+// NOTA: la lettura resta pubblica per chiunque abbia il link (nessun
+// login per consultare i bandi). La scrittura su config/admin/sources
+// invece richiede di essere autenticati: l'app chiede un codice numerico
+// (vedi SETUP.md, sezione "Proteggi le modifiche con un codice di
+// accesso") che internamente fa login con un account Firebase dedicato.
+// Chi non inserisce il codice giusto non può modificare nulla.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Chiunque abbia il link dell'app può leggere e modificare le impostazioni
-    // (parole chiave, frequenza). Nessun login: adatto a un uso privato/familiare
-    // con URL non pubblicizzato, non a un progetto esposto pubblicamente.
+    // Chiunque abbia il link dell'app può leggere le impostazioni; per
+    // modificarle (parole chiave, frequenza) serve il codice di accesso.
     match /config/main {
       allow read: if true;
-      allow write: if true;
+      allow write: if request.auth != null;
     }
 
     // Stato dell'ultima scansione: leggibile da tutti, scrivibile SOLO dallo
@@ -33,19 +30,19 @@ service cloud.firestore {
     }
 
     // Il pulsante "Ricomincia da zero" nell'app scrive qui per chiedere
-    // allo scraper di svuotare i bandi trovati al prossimo giro.
+    // allo scraper di svuotare i bandi trovati al prossimo giro. Anche
+    // questo richiede il codice di accesso.
     match /admin/reset {
       allow read: if true;
-      allow write: if true;
+      allow write: if request.auth != null;
     }
 
-    // Elenco delle pagine monitorate: leggibile e modificabile dall'app
-    // (stessa logica delle impostazioni sopra -- nessun login, adatto a
-    // uso privato con URL non pubblicizzato). Lo scraper le legge tramite
-    // la Admin SDK, che ignora comunque queste regole.
+    // Elenco delle pagine monitorate: leggibile da tutti; per aggiungere o
+    // rimuovere fonti serve il codice di accesso. Lo scraper le legge
+    // tramite la Admin SDK, che ignora comunque queste regole.
     match /sources/{doc} {
       allow read: if true;
-      allow write: if true;
+      allow write: if request.auth != null;
     }
   }
 }
