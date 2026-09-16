@@ -622,6 +622,18 @@ def expand_keywords_with_translation(keywords):
                 failures += 1
                 continue
 
+        if best_text and _normalize_kw(best_text) in seen_norm:
+            # Il servizio online ha restituito una traduzione "valida" ma
+            # identica a quella GIA usata per un'altra parola chiave (es.
+            # MyMemory puo rispondere "agriculture" sia per "agricoltura"
+            # che per "agricoltura sostenibile", non avendo un match
+            # specifico per la frase intera) — verificato accadere
+            # davvero in produzione. Non e una traduzione specifica per
+            # QUESTA parola chiave: la trattiamo come se il servizio non
+            # avesse prodotto nulla di utile, invece di scartarla in
+            # silenzio senza mai provare il dizionario di riserva.
+            best_text = None
+
         used_domain_dict = False
         if not best_text:
             # Il servizio online non ha prodotto nulla di utilizzabile per
