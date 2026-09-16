@@ -20,7 +20,7 @@
 // i minuti di GitHub Actions sono comunque gratuiti sui repository
 // pubblici. Vedi SETUP.md, sezione "Avvia scansione dall'app".
 window.GITHUB_CONFIG = {
-  token: "INCOLLA_QUI_IL_TUO_TOKEN_GITHUB",
+  token: "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",
   owner: "LandM00",
   repo: "grantscout",
   workflowFile: "scan.yml",
