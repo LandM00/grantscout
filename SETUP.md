@@ -148,15 +148,55 @@ una password diversa, oppure eliminando e ricreando l'utente). Ogni
 browser resta sbloccato finché non premi "Blocca" o cancelli i dati del
 sito, poi richiederà di nuovo il codice.
 
+## 14. Avvia scansione dall'app (senza andare su GitHub)
+
+Il pulsante "Avvia scansione ora" (sotto le impostazioni ricerca) può
+lanciare la scansione direttamente dall'app, senza passare dalla scheda
+Actions di GitHub — utile se vuoi provare più argomenti di ricerca uno
+dopo l'altro in pochi minuti. Per attivarlo:
+
+1. Su GitHub vai su **github.com/settings/tokens?type=beta** → **Generate
+   new token**.
+2. Dai un nome al token (es. "grantscout-scan-trigger") e imposta una
+   scadenza (consigliato: qualche mese, poi lo rigeneri).
+3. **Repository access** → **Only select repositories** → scegli solo
+   questo repository.
+4. **Permissions** → **Repository permissions** → **Actions** → imposta
+   **Read and write**. Lascia tutto il resto su "No access" (soprattutto
+   NON dare accesso a "Contents" o "Secrets").
+5. **Generate token** e copia il valore (inizia con `github_pat_...`) —
+   non lo rivedrai più dopo aver lasciato la pagina.
+6. Apri `docs/github-config.js` nel progetto e incolla il token al posto
+   di `INCOLLA_QUI_IL_TUO_TOKEN_GITHUB`. Se il nome utente/organizzazione
+   o il nome del repository su GitHub sono diversi da quelli già scritti
+   nel file, aggiorna anche `owner` e `repo`.
+7. Salva, fai commit e push.
+8. Su "Impostazioni ricerca", sblocca con il codice di accesso e premi
+   "Avvia scansione ora": dopo qualche secondo dovresti vedere il
+   messaggio di conferma, e dopo 1-3 minuti i nuovi risultati.
+
+**Importante sulla sicurezza**: questo token finisce nel codice del sito,
+quindi è visibile a chiunque lo guardi (è così per qualunque sito
+statico come questo — non c'è un modo per nasconderlo davvero senza un
+server proprio). Con i permessi indicati sopra (solo "Actions" su questo
+repository) il rischio peggiore se qualcuno lo trovasse è che lanci
+scansioni a vuoto: fastidioso ma innocuo, perché non permette di leggere
+o modificare il codice, i segreti o altri dati del progetto, e i minuti
+di GitHub Actions sono comunque gratuiti sui repository pubblici. Se non
+configuri questo token, il pulsante ti avvisa e resta comunque possibile
+lanciare la scansione a mano dalla scheda Actions di GitHub, come prima.
+
 ---
 
 ## Limiti da conoscere (onestà prima di tutto)
 
-- **Il pulsante "Aggiorna vista"** non avvia una nuova scansione: mostra
-  gli ultimi dati già raccolti. Per forzare una scansione immediata va
-  lanciata a mano dalla scheda Actions di GitHub (come al punto 10) — è
-  un'operazione che serve fare a te, non a tuo fratello, perché richiede
-  accesso a GitHub.
+- **Il pulsante "Avvia scansione ora"** funziona solo se hai configurato
+  il token in `docs/github-config.js` (punto 14): altrimenti ti avvisa e
+  la scansione va lanciata a mano dalla scheda Actions di GitHub (come al
+  punto 10) — un'operazione che richiede accesso a GitHub.
+- **Anche con il pulsante configurato**, il risultato non è immediato: la
+  scansione vera gira su GitHub Actions e di solito ci vogliono 1-3
+  minuti prima che compaiano i nuovi risultati nell'app.
 - **Le voci "Da verificare"** sono segnalazioni automatiche generate
   quando una fonte monitorata contiene una parola chiave cercata — non un
   riassunto intelligente. Vanno sempre controllate sulla fonte ufficiale

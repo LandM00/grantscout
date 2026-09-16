@@ -239,8 +239,8 @@
   </details>
 
   <div class="refresh-row">
-    <button class="refresh" id="refreshBtn" type="button">Aggiorna vista</button>
-    <span class="save-msg" id="refreshMsg"></span>
+    <button class="refresh" id="scanBtn" type="button">Avvia scansione ora</button>
+    <span class="save-msg" id="scanMsg"></span>
   </div>
 
   <div class="columns">
@@ -265,6 +265,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="github-config.js"></script>
 <script>
 (function(){
   var FREQ_LABELS = {weekly:"Settimanale", biweekly:"Ogni due settimane", monthly:"Mensile"};
@@ -365,8 +366,8 @@
   var freqInput = document.getElementById("freqInput");
   var saveBtn = document.getElementById("saveBtn");
   var saveMsg = document.getElementById("saveMsg");
-  var refreshBtn = document.getElementById("refreshBtn");
-  var refreshMsg = document.getElementById("refreshMsg");
+  var scanBtn = document.getElementById("scanBtn");
+  var scanMsg = document.getElementById("scanMsg");
   var offlineBanner = document.getElementById("offlineBanner");
 
   var pinInput = document.getElementById("pinInput");
@@ -624,15 +625,37 @@
     });
   }
 
-  if(refreshBtn){
-    refreshBtn.addEventListener("click", function(){
-      refreshBtn.disabled = true; refreshMsg.textContent = "Ricarico…";
-      loadAll();
-      setTimeout(function(){
-        refreshBtn.disabled = false;
-        refreshMsg.textContent = "Vista aggiornata con gli ultimi dati disponibili.";
-        setTimeout(function(){ refreshMsg.textContent = ""; }, 4000);
-      }, 500);
+  if(scanBtn){
+    scanBtn.addEventListener("click", function(){
+      if(!requireUnlock(scanMsg)) return;
+      var cfg = window.GITHUB_CONFIG;
+      if(!cfg || !cfg.token || cfg.token.indexOf("INCOLLA_QUI") === 0){
+        scanMsg.textContent = "Configura github-config.js per abilitare l'avvio scansione da qui (vedi SETUP.md).";
+        return;
+      }
+      scanBtn.disabled = true; scanMsg.textContent = "Avvio scansione…";
+      fetch("https://api.github.com/repos/" + cfg.owner + "/" + cfg.repo + "/actions/workflows/" + cfg.workflowFile + "/dispatches", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + cfg.token,
+          "Accept": "application/vnd.github+json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ref: cfg.ref || "main" })
+      }).then(function(resp){
+        if(!resp.ok){ throw new Error("HTTP " + resp.status); }
+        scanMsg.textContent = "Scansione avviata su GitHub Actions — di solito ci vogliono 1-3 minuti. Aggiorno la vista automaticamente tra poco.";
+        loadAll();
+        setTimeout(function(){
+          loadAll();
+          scanBtn.disabled = false;
+          scanMsg.textContent = "Vista aggiornata. Se non vedi ancora i nuovi risultati la scansione potrebbe essere ancora in corso: riprova tra un minuto.";
+          setTimeout(function(){ scanMsg.textContent = ""; }, 8000);
+        }, 100000);
+      }).catch(function(){
+        scanBtn.disabled = false;
+        scanMsg.textContent = "Errore nell'avvio della scansione (controlla il token in github-config.js). Puoi comunque lanciarla a mano dalla scheda Actions di GitHub.";
+      });
     });
   }
 
