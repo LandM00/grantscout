@@ -398,7 +398,7 @@
         unlockBtn.disabled = false;
       }).catch(function(err){
         console.error("Errore sblocco:", err);
-        unlockMsg.textContent = "Codice errato, riprova. (dettaglio: " + (err && err.code ? err.code : err) + ")";
+        unlockMsg.textContent = "Codice errato, riprova.";
         unlockBtn.disabled = false;
       });
     });
