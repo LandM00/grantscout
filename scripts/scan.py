@@ -332,7 +332,18 @@ def search_funding_tenders_portal(keywords):
     senza lasciare traccia), ma accumuliamo TUTTE le parole chiave che
     hanno prodotto ciascun bando, in `matched_terms_by_id`, e la usiamo
     sia per il testo del riepilogo sia per il punteggio di rilevanza
-    (vedi compute_match_score)."""
+    (vedi compute_match_score).
+
+    Il motore di ricerca del portale UE cerca la parola chiave in tutto
+    il testo indicizzato del bando (anche descrizione lunga, allegati,
+    ecc.), non solo nel titolo: capita quindi che compaia un bando il
+    cui titolo non ha niente a che vedere con la ricerca fatta, solo
+    perché la parola compare una volta in un paragrafo secondario. Per
+    questo, PRIMA di includere un bando nei risultati, controlliamo che
+    almeno una delle parole chiave che l'hanno trovato compaia anche nel
+    suo titolo (stesso confronto tollerante di keyword_matches_text): se
+    nessuna lo fa, il bando viene scartato come probabilmente non
+    pertinente."""
     items_by_id = {}
     matched_terms_by_id = {}
     errors = []
@@ -418,6 +429,9 @@ def search_funding_tenders_portal(keywords):
     results = []
     for item_id, item in items_by_id.items():
         found_terms = matched_terms_by_id.get(item_id, [])
+        title_tokens = _tokenize(item["title"].lower())
+        if not any(keyword_matches_text(t, title_tokens) for t in found_terms):
+            continue  # nessuna parola chiave nel titolo del bando: probabilmente non pertinente
         match_score = compute_match_score(found_terms)
         relevance_tag = relevance_label(match_score)
         if relevance_tag:
