@@ -499,6 +499,50 @@ def _normalize_kw(text):
 # inaffidabile).
 TRANSLATION_MATCH_THRESHOLD = 0.5
 
+# Piccolo dizionario di riserva per frasi del dominio di questo progetto
+# (migrazione e lavoro agricolo, vedi README) che MyMemory tipicamente NON
+# ha in archivio con un punteggio affidabile — verificato a mano: "agricoltura
+# sostenibile" è uno di questi casi (vedi commento sopra). Usato SOLO come
+# ultimo ripiego, quando il tentativo con il servizio online non produce
+# nulla di utilizzabile: non sostituisce MyMemory, lo integra per i termini
+# che contano di più per questo progetto specifico. Se in futuro riorienti
+# l'app su un altro argomento (il README lo prevede esplicitamente), aggiungi
+# qui le coppie utili al tuo nuovo tema — non serve toccare altro codice.
+DOMAIN_TRANSLATION_PAIRS = [
+    ("agricoltura sostenibile", "sustainable agriculture"),
+    ("lavoro agricolo", "agricultural labour"),
+    ("lavoro migrante", "migrant labour"),
+    ("caporalato", "gangmaster system"),
+    ("sfruttamento lavorativo", "labour exploitation"),
+    ("filiera agroalimentare", "agri-food supply chain"),
+    ("sicurezza alimentare", "food security"),
+    ("inclusione sociale", "social inclusion"),
+    ("integrazione dei migranti", "migrant integration"),
+    ("manodopera agricola", "agricultural workforce"),
+    ("diritti dei lavoratori", "workers' rights"),
+    ("economia rurale", "rural economy"),
+    ("sviluppo rurale", "rural development"),
+    ("migrazione economica", "economic migration"),
+    ("lavoratori stagionali", "seasonal workers"),
+    ("politiche migratorie", "migration policy"),
+    ("agricoltura sociale", "social farming"),
+]
+
+
+def _build_domain_translation_lookup(pairs):
+    lookup = {}
+    for it_text, en_text in pairs:
+        lookup[_normalize_kw(it_text)] = en_text
+        lookup[_normalize_kw(en_text)] = it_text
+    return lookup
+
+
+# Dizionario vero e proprio usato in fase di ricerca: {frase normalizzata:
+# sua traduzione}, costruito una volta sola dalle coppie sopra, in entrambe
+# le direzioni (così funziona sia se scrivi la parola chiave in italiano
+# che in inglese).
+DOMAIN_TRANSLATIONS = _build_domain_translation_lookup(DOMAIN_TRANSLATION_PAIRS)
+
 
 def _is_usable_translation(original, translated, match_value):
     if not translated:
@@ -548,6 +592,7 @@ def expand_keywords_with_translation(keywords):
     attempts = 0
     failures = 0
     discarded_low_quality = 0
+    from_domain_dict = 0
     for kw in keywords[:8]:  # limite prudente per non consumare troppa quota gratuita
         best_text, best_score = None, -1.0
         for langpair in ("it|en", "en|it"):
@@ -576,16 +621,30 @@ def expand_keywords_with_translation(keywords):
             except Exception:
                 failures += 1
                 continue
+
+        used_domain_dict = False
+        if not best_text:
+            # Il servizio online non ha prodotto nulla di utilizzabile per
+            # questa parola chiave: proviamo il dizionario di riserva del
+            # dominio prima di rinunciare del tutto alla traduzione.
+            fallback = DOMAIN_TRANSLATIONS.get(_normalize_kw(kw))
+            if fallback:
+                best_text = fallback
+                used_domain_dict = True
+
         if best_text and _normalize_kw(best_text) not in seen_norm:
             expanded.append(best_text)
             seen_norm.add(_normalize_kw(best_text))
             translations[kw] = best_text
+            if used_domain_dict:
+                from_domain_dict += 1
 
     print(
-        "Traduzione automatica parole chiave: {} nuove parole aggiunte, "
+        "Traduzione automatica parole chiave: {} nuove parole aggiunte "
+        "({} dal dizionario di riserva del dominio), "
         "{} scartate (bassa affidabilità, quota esaurita, o identiche al testo di partenza), "
         "{} tentativi falliti su {}.".format(
-            len(expanded) - len(keywords), discarded_low_quality, failures, attempts)
+            len(expanded) - len(keywords), from_domain_dict, discarded_low_quality, failures, attempts)
     )
     return expanded, translations
 
