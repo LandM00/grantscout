@@ -400,8 +400,17 @@ def expand_keywords_with_translation(keywords):
     resto della scansione funziona comunque senza."""
     if not keywords:
         return keywords
+
+    def normalize(text):
+        # Confronto "morbido": ignora maiuscole/minuscole, spazi e
+        # punteggiatura finale — MyMemory a volte restituisce la stessa
+        # frase quasi identica (es. con un punto finale aggiunto) quando
+        # prova a tradurla nella direzione sbagliata, e questo va scartato
+        # come falso positivo, non aggiunto come parola "nuova".
+        return re.sub(r"[\s.!?]+$", "", text.strip().lower())
+
     expanded = list(keywords)
-    seen_lower = {k.lower() for k in expanded}
+    seen_norm = {normalize(k) for k in expanded}
     attempts = 0
     failures = 0
     for kw in keywords[:8]:  # limite prudente per non consumare troppa quota gratuita
@@ -416,9 +425,9 @@ def expand_keywords_with_translation(keywords):
                 resp.raise_for_status()
                 data = resp.json()
                 translated = (data.get("responseData") or {}).get("translatedText")
-                if translated and translated.lower() not in seen_lower:
+                if translated and normalize(translated) not in seen_norm:
                     expanded.append(translated)
-                    seen_lower.add(translated.lower())
+                    seen_norm.add(normalize(translated))
             except Exception:
                 failures += 1
                 continue
