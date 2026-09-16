@@ -157,10 +157,14 @@ sito, poi richiederà di nuovo il codice.
   lanciata a mano dalla scheda Actions di GitHub (come al punto 10) — è
   un'operazione che serve fare a te, non a tuo fratello, perché richiede
   accesso a GitHub.
-- **Le voci "Da verificare"** (COST, MUR, Alto Adige, IMISCOE) sono
-  segnalazioni automatiche — una parola chiave trovata, o la pagina che è
-  cambiata — non un riassunto intelligente. Vanno sempre controllate sulla
-  fonte ufficiale prima di fidarsene.
+- **Le voci "Da verificare"** sono segnalazioni automatiche generate
+  quando una fonte monitorata contiene una parola chiave cercata — non un
+  riassunto intelligente. Vanno sempre controllate sulla fonte ufficiale
+  prima di fidarsene. L'elenco delle fonti monitorate parte vuoto: le
+  aggiungi tu dal pannello "Impostazioni ricerca" → "Fonti monitorate",
+  e quando cambi completamente argomento di ricerca puoi usare il
+  pulsante "Cambia argomento" per svuotare bandi e fonti insieme in un
+  colpo solo.
 - **L'integrazione Horizon Europe** usa un endpoint pubblico del portale
   Funding & Tenders che non è ufficialmente documentato dalla Commissione
   Europea: funziona nella maggior parte dei casi, ma se smette di

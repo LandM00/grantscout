@@ -213,7 +213,13 @@
         <button class="reset" id="resetBtn" type="button">Ricomincia da zero</button>
         <span class="save-msg" id="resetMsg"></span>
       </div>
-      <p class="field-help">Svuota tutti i bandi trovati finora (utile se cambi completamente argomento di ricerca). Non tocca parole chiave, frequenza o fonti monitorate.</p>
+      <p class="field-help">Svuota tutti i bandi trovati finora. Non tocca parole chiave, frequenza o fonti monitorate.</p>
+
+      <div class="settings-actions" style="margin-top:8px;">
+        <button class="reset" id="resetTopicBtn" type="button">Cambia argomento</button>
+        <span class="save-msg" id="resetTopicMsg"></span>
+      </div>
+      <p class="field-help">Svuota bandi e fonti monitorate insieme: usalo quando cambi completamente argomento di ricerca, così non ritrovi segnalazioni sul vecchio argomento. Parole chiave e frequenza restano invariate — ricordati di aggiornarle qui sopra.</p>
 
       <div class="field" style="margin-top:18px;">
         <label for="sourceInput">Aggiungi fonte/i da monitorare</label>
@@ -594,6 +600,26 @@
         }).catch(function(){
           resetMsg.textContent = "Errore, riprova.";
           resetBtn.disabled = false;
+        });
+    });
+  }
+
+  var resetTopicBtn = document.getElementById("resetTopicBtn");
+  var resetTopicMsg = document.getElementById("resetTopicMsg");
+  if(resetTopicBtn){
+    resetTopicBtn.addEventListener("click", function(){
+      if(!db) return;
+      if(!requireUnlock(resetTopicMsg)) return;
+      var ok = window.confirm("Sicuro di voler cambiare argomento? Verranno eliminati TUTTI i bandi trovati finora E tutte le fonti monitorate. Non si può annullare. Parole chiave e frequenza restano invariate.");
+      if(!ok) return;
+      resetTopicBtn.disabled = true; resetTopicMsg.textContent = "Richiesta inviata…";
+      db.collection("admin").doc("reset").set({ requested: true, alsoClearSources: true, requestedAt: new Date().toISOString() })
+        .then(function(){
+          resetTopicMsg.textContent = "Fatto — bandi e fonti verranno svuotati alla prossima esecuzione dello scraper (entro 6 ore, o subito se la lanci a mano da GitHub Actions).";
+          resetTopicBtn.disabled = false;
+        }).catch(function(){
+          resetTopicMsg.textContent = "Errore, riprova.";
+          resetTopicBtn.disabled = false;
         });
     });
   }

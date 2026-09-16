@@ -15,7 +15,7 @@ Gira su GitHub Actions secondo lo schedule in .github/workflows/scan.yml
   3. Se è il momento: prova a interrogare l'API pubblica del portale
      Funding & Tenders (Horizon Europe) e controlla un elenco di pagine
      istituzionali (configurabile in Firestore, collection "sources")
-     cercando le parole chiave o un cambiamento di contenuto.
+     cercando la presenza delle parole chiave scelte dall'utente.
   4. Scrive/aggiorna i risultati nella collection "calls" di Firestore,
      e aggiorna meta/status.
 
@@ -25,11 +25,13 @@ rilevanza. Le voci di tipo "watch" vanno sempre verificate a mano.
 
 L'elenco delle pagine istituzionali da controllare NON è fisso nel
 codice: vive nella collection Firestore "sources" (ognuna: url, funder,
-category, title). La prima esecuzione la popola con un elenco di default
-(vedi DEFAULT_SOURCES) se è vuota; da lì si può aggiungere/togliere/
-modificare fonti direttamente dall'app (pannello "Impostazioni ricerca"
-→ "Fonti monitorate"), senza toccare il codice — utile se un giorno si
-vuole riorientare l'app su un altro argomento di ricerca.
+category, title) e parte vuoto — si aggiunge/toglie/modifica fonti
+direttamente dall'app (pannello "Impostazioni ricerca" → "Fonti
+monitorate"), senza toccare il codice. Una fonte produce una
+segnalazione SOLO se il suo testo contiene una parola chiave cercata:
+non basta più che la pagina sia semplicemente "cambiata", per evitare
+falsi allarmi quando si cambia argomento di ricerca (pulsante
+"Cambia argomento" nell'app).
 
 Nota: questo script usava anche la Custom Search JSON API di Google per
 una ricerca generica sul web, rimossa a settembre 2026 perché Google ha
@@ -117,40 +119,6 @@ HTTP_TIMEOUT = 25
 #     residenziale, che e un servizio a pagamento.
 JINA_READER_PREFIX = "https://r.jina.ai/"
 JINA_TIMEOUT = 45  # piu lento della richiesta diretta: usa un browser headless vero
-
-# Elenco di default delle pagine istituzionali da controllare, usato SOLO
-# per popolare la collection Firestore "sources" la prima volta (se vuota).
-# Da lì in poi l'elenco effettivo si modifica in Firestore, non qui.
-DEFAULT_SOURCES = [
-    {
-        "id": "cost-open-call",
-        "funder": "COST Association",
-        "url": "https://www.cost.eu/funding/open-call-a-simple-one-step-application-process/",
-        "category": "network",
-        "title": "COST Open Call — proposta di nuova COST Action",
-    },
-    {
-        "id": "mur-prin",
-        "funder": "MUR — Ministero dell'Università e della Ricerca",
-        "url": "https://www.mur.gov.it/it/atti-e-normativa",
-        "category": "funding",
-        "title": "Bandi/decreti MUR (inclusi cicli PRIN)",
-    },
-    {
-        "id": "alto-adige-ricerca",
-        "funder": "Provincia Autonoma di Bolzano/Alto Adige",
-        "url": "https://innovazione-ricerca.provincia.bz.it/it/agevolazioni-bandi",
-        "category": "funding",
-        "title": "Bandi Ricerca e Innovazione — Provincia di Bolzano",
-    },
-    {
-        "id": "imiscoe-news",
-        "funder": "IMISCOE",
-        "url": "https://www.imiscoe.org/news-and-blog",
-        "category": "network",
-        "title": "Rete IMISCOE — news, call for papers e conferenze",
-    },
-]
 
 # Dati iniziali (raccolti manualmente l'11/09/2026) inseriti una sola volta,
 # così l'app non parte vuota mentre lo scraper automatico matura.
@@ -263,22 +231,6 @@ def should_run(config, meta):
     return False, "non ancora ({:.1f}/{} giorni)".format(elapsed_days, threshold_days)
 
 
-def seed_sources_if_empty(db):
-    """Popola la collection 'sources' con l'elenco di default SOLO se è
-    vuota — da quel momento in poi l'elenco vero vive in Firestore e può
-    essere modificato dalla console Firebase senza toccare il codice."""
-    existing = list(db.collection("sources").limit(1).stream())
-    if existing:
-        return
-    batch = db.batch()
-    for page in DEFAULT_SOURCES:
-        doc_id = page["id"]
-        data = {k: v for k, v in page.items() if k != "id"}
-        batch.set(db.collection("sources").document(doc_id), data)
-    batch.commit()
-    print("Elenco fonti di default inserito in Firestore ({} pagine).".format(len(DEFAULT_SOURCES)))
-
-
 def load_sources(db):
     docs = db.collection("sources").stream()
     sources = []
@@ -290,17 +242,10 @@ def load_sources(db):
     return sources
 
 
-def check_and_apply_reset(db):
-    """Il pulsante 'Ricomincia da zero' nell'app scrive admin/reset con
-    requested=true. Qui lo leggiamo e, se richiesto, svuotiamo la
-    collection 'calls' (non le fonti né le impostazioni)."""
-    snap = db.collection("admin").document("reset").get()
-    if not snap.exists:
-        return False
-    data = snap.to_dict() or {}
-    if not data.get("requested"):
-        return False
-    docs = list(db.collection("calls").stream())
+def _delete_all(db, collection_name):
+    """Elimina tutti i documenti di una collection, a lotti di 400
+    (limite di Firestore per batch). Restituisce quanti ne ha eliminati."""
+    docs = list(db.collection(collection_name).stream())
     batch = db.batch()
     for i, doc in enumerate(docs):
         batch.delete(doc.reference)
@@ -308,11 +253,34 @@ def check_and_apply_reset(db):
             batch.commit()
             batch = db.batch()
     batch.commit()
+    return len(docs)
+
+
+def check_and_apply_reset(db):
+    """Il pulsante 'Ricomincia da zero' nell'app scrive admin/reset con
+    requested=true: qui lo leggiamo e svuotiamo la collection 'calls'
+    (non le fonti né le impostazioni). Il pulsante 'Cambia argomento'
+    scrive in più anche alsoClearSources=true: in quel caso svuotiamo
+    anche la collection 'sources', così si riparte da zero anche sulle
+    pagine monitorate quando si cambia completamente argomento."""
+    snap = db.collection("admin").document("reset").get()
+    if not snap.exists:
+        return False
+    data = snap.to_dict() or {}
+    if not data.get("requested"):
+        return False
+    n_calls = _delete_all(db, "calls")
+    n_sources = None
+    if data.get("alsoClearSources"):
+        n_sources = _delete_all(db, "sources")
     db.collection("admin").document("reset").set({
         "requested": False,
         "lastResetAt": now_iso(),
     })
-    print("Reset richiesto dall'app: eliminati {} bandi.".format(len(docs)))
+    if n_sources is None:
+        print("Reset richiesto dall'app: eliminati {} bandi.".format(n_calls))
+    else:
+        print("Reset richiesto dall'app (cambio argomento): eliminati {} bandi e {} fonti monitorate.".format(n_calls, n_sources))
     return True
 
 
@@ -889,10 +857,13 @@ def fetch_page_text(url):
 
 
 def check_watch_pages(keywords, previous_hashes, sources):
-    """Per ogni pagina in 'sources' (da Firestore): scarica il testo,
-    controlla se contiene una delle parole chiave e se il contenuto è
-    cambiato rispetto all'ultima esecuzione. Non "capisce" il contenuto:
-    segnala solo dove guardare a mano.
+    """Per ogni pagina in 'sources' (da Firestore): scarica il testo e
+    controlla se contiene una delle parole chiave scelte dall'utente. Non
+    "capisce" il contenuto: segnala solo dove guardare a mano. Segnala
+    SOLO quando trova davvero una parola chiave (il solo fatto che la
+    pagina sia cambiata non basta più): questo evita falsi allarmi
+    quando si cambia argomento di ricerca ma una fonte fissa cambia per
+    conto suo (es. una data o un banner).
 
     Oltre ai risultati, restituisce anche `page_status`: un elenco con
     l'esito (raggiunta o no, ed eventuale errore) di OGNI pagina
@@ -921,8 +892,8 @@ def check_watch_pages(keywords, previous_hashes, sources):
                 "id": page["id"], "url": page["url"], "funder": page.get("funder", ""), "ok": True,
             })
 
-            if not matched_keywords and not changed:
-                continue  # niente di nuovo da segnalare per questa pagina
+            if not matched_keywords:
+                continue  # nessuna parola chiave trovata: niente da segnalare
 
             note_parts = []
             if matched_keywords:
@@ -1116,7 +1087,6 @@ def main():
     config = get_doc(db, "config", "main", default={"keywords": [], "frequency": DEFAULT_FREQUENCY})
     meta = get_doc(db, "meta", "status", default={})
 
-    seed_sources_if_empty(db)
     sources = load_sources(db)
 
     was_reset = check_and_apply_reset(db)
