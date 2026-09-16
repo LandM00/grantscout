@@ -334,6 +334,19 @@ def search_funding_tenders_portal(keywords):
             data = resp.json()
             hits = (data.get("results") or data.get("hits") or [])
             for hit in hits:
+                # L'API mescola, sotto gli stessi risultati e nonostante il
+                # filtro "type"/"status" sopra, anche progetti UE GIA
+                # FINANZIATI (in corso o conclusi) la cui descrizione contiene
+                # semplicemente la parola chiave -- non bandi a cui ci si puo
+                # ancora candidare. Verificato a mano: per query tipiche circa
+                # 7 risultati su 10 erano di questo tipo, non bandi veri.
+                # Si distinguono in modo affidabile dal campo "database": solo
+                # i temi/bandi veri del portale hanno database == "SEDIA"; un
+                # progetto gia finanziato ha questo campo assente. Li
+                # scartiamo qui, altrimenti la maggior parte delle
+                # segnalazioni sarebbe rumore su iniziative non piu aperte.
+                if hit.get("database") != "SEDIA":
+                    continue
                 fields = hit.get("metadata", hit)
                 title = _first(fields, ["title", "callTitle"]) or "Bando Horizon Europe"
                 identifier = _first(fields, ["identifier", "callIdentifier", "reference"])
