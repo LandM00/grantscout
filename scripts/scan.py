@@ -540,6 +540,31 @@ def check_watch_pages(keywords, previous_hashes, sources):
     return results, new_hashes, page_status
 
 
+def prune_stale_horizon_calls(db, current_ids):
+    """I bandi trovati su Horizon Europe (source == "funding-tenders-api")
+    sono il riflesso di una ricerca dal vivo, fatta da zero ad ogni
+    scansione: se un bando non compare piu tra i risultati (perche non
+    corrisponde piu alle parole chiave, o -- come scoperto oggi -- perche
+    in realta era un progetto gia finanziato ora giustamente escluso), non
+    ha senso lasciarlo per sempre nel database con dati potenzialmente non
+    piu validi (incluso, prima di oggi, un link ormai rotto). A differenza
+    delle pagine monitorate (che rappresentano uno stato da tracciare nel
+    tempo), i risultati Horizon vengono qui riallineati esattamente a
+    quanto trovato nell'ultima scansione: chi non c'e piu viene rimosso."""
+    docs = db.collection("calls").where("source", "==", "funding-tenders-api").stream()
+    batch = db.batch()
+    removed = 0
+    for doc in docs:
+        if doc.id not in current_ids:
+            batch.delete(doc.reference)
+            removed += 1
+            if removed % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+    batch.commit()
+    return removed
+
+
 def upsert_calls(db, items):
     if not items:
         return 0
@@ -674,6 +699,7 @@ def main():
     all_new_items = []
 
     horizon_items, horizon_stats = search_funding_tenders_portal(search_keywords)
+    horizon_ids_now = {item["id"] for item in horizon_items}
     sources_checked.append(
         "Horizon Europe / Funding & Tenders Portal: {} risultati ({}/{} parole chiave riuscite)".format(
             len(horizon_items), horizon_stats["termsTotal"] - horizon_stats["termsFailed"], horizon_stats["termsTotal"])
@@ -699,6 +725,19 @@ def main():
     # l'API non ufficiale del portale UE) viene corretta nella stessa
     # esecuzione, non in quella successiva.
     written = upsert_calls(db, all_new_items)
+
+    # La pulizia dei bandi Horizon obsoleti si fa SOLO se la ricerca di
+    # questa scansione e' riuscita per intero (nessuna parola chiave
+    # fallita): altrimenti "non trovato piu'" potrebbe voler dire solo che
+    # l'API non ha risposto per quel termine, non che il bando non esiste
+    # piu' -- e cancellarlo sarebbe un errore, non una pulizia.
+    if horizon_stats["termsFailed"] == 0:
+        pruned = prune_stale_horizon_calls(db, horizon_ids_now)
+    else:
+        pruned = 0
+        print("Pulizia bandi Horizon obsoleti saltata: {}/{} parole chiave fallite in questa scansione.".format(
+            horizon_stats["termsFailed"], horizon_stats["termsTotal"]))
+
     closed_count = close_expired_calls(db)
 
     db.collection("meta").document("status").set({
@@ -706,10 +745,12 @@ def main():
         "sourcesChecked": sources_checked,
         "pageHashes": new_hashes,
         "health": health,
-        "notes": "{} voci scritte/aggiornate, {} bandi contrassegnati come scaduti.".format(written, closed_count),
+        "notes": "{} voci scritte/aggiornate, {} bandi Horizon obsoleti rimossi, {} bandi contrassegnati come scaduti.".format(
+            written, pruned, closed_count),
     }, merge=True)
 
-    print("Fatto: {} voci aggiornate, {} bandi chiusi automaticamente.".format(written, closed_count))
+    print("Fatto: {} voci aggiornate, {} bandi Horizon obsoleti rimossi, {} bandi chiusi automaticamente.".format(
+        written, pruned, closed_count))
 
 
 if __name__ == "__main__":
