@@ -470,33 +470,86 @@ def status_from_deadline(deadline_date):
     return "closed" if deadline_date < today else "open"
 
 
+def _normalize_kw(text):
+    # Confronto "morbido": ignora maiuscole/minuscole, spazi e punteggiatura
+    # finale — usato sia per il controllo doppioni sia per riconoscere una
+    # "traduzione" che è in realtà il testo di partenza quasi identico
+    # (tipico di un tentativo nella direzione sbagliata, es. "en|it" su un
+    # testo già in italiano).
+    return re.sub(r"[\s.!?]+$", "", text.strip().lower())
+
+
+# MyMemory è una translation MEMORY (cerca frasi già tradotte da altri in un
+# archivio di documenti reali, soprattutto testi UE), non un motore di
+# traduzione automatica generalista: per una parola isolata comune di solito
+# trova un match affidabile, ma per una combinazione di più parole meno
+# comune può non avere nulla in archivio. In quel caso — o quando la quota
+# gratuita giornaliera (condivisa fra tutti gli utenti di GitHub Actions nel
+# mondo) è esaurita — l'API risponde comunque con HTTP 200, ma il testo
+# restituito non è una vera traduzione: può essere il testo originale quasi
+# invariato, una traduzione di bassissima qualità, o il messaggio
+# "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY..."
+# spacciato per traduzione. L'API fornisce un punteggio di affidabilità
+# ("match", da 0 a 1) che permette di riconoscere questi casi — il codice
+# precedente lo ignorava completamente e accettava alla cieca qualsiasi
+# risposta, che è la causa esatta per cui frasi come "agricoltura
+# sostenibile" risultavano non tradotte senza nessun errore visibile in log.
+# La soglia sotto non è documentata dall'API: è una scelta prudente basata
+# sull'uso comune di questo servizio (sotto 0.5 la qualità è tipicamente
+# inaffidabile).
+TRANSLATION_MATCH_THRESHOLD = 0.5
+
+
+def _is_usable_translation(original, translated, match_value):
+    if not translated:
+        return False
+    if "MYMEMORY WARNING" in translated.upper():
+        return False
+    try:
+        match_score = float(match_value)
+    except (TypeError, ValueError):
+        match_score = 0.0
+    if match_score < TRANSLATION_MATCH_THRESHOLD:
+        return False
+    if _normalize_kw(translated) == _normalize_kw(original):
+        return False
+    return True
+
+
 def expand_keywords_with_translation(keywords):
     """Aggiunge automaticamente una traduzione italiano<->inglese di ogni
-    parola chiave, per ampliare la ricerca senza doverle scrivere a mano
-    in entrambe le lingue. Usa MyMemory (mymemory.translated.net), un
-    servizio di traduzione gratuito ma con un limite di utilizzo
-    giornaliero condiviso per indirizzo IP — dato che GitHub Actions usa
-    IP condivisi con moltissimi altri progetti nel mondo, può capitare
-    che il limite sia già esaurito da altri. In quel caso (o per qualsiasi
-    altro errore) questa funzione fallisce in modo silenzioso e restituisce
-    semplicemente le parole originali: è un ampliamento facoltativo, il
-    resto della scansione funziona comunque senza."""
-    if not keywords:
-        return keywords
+    parola chiave (frase intera, non parola per parola), per ampliare la
+    ricerca senza doverle scrivere a mano in entrambe le lingue. Usa
+    MyMemory (mymemory.translated.net), un servizio di traduzione gratuito
+    con un limite di utilizzo giornaliero condiviso per indirizzo IP e,
+    soprattutto, una copertura non garantita per frasi meno comuni (vedi
+    commento su TRANSLATION_MATCH_THRESHOLD sopra). Ogni traduzione viene
+    validata con il punteggio di affidabilità dell'API prima di essere
+    usata; se fallisce (errore di rete, quota esaurita, o traduzione di
+    bassa qualità), quella parola chiave resta semplicemente non tradotta —
+    non blocca mai il resto della scansione.
 
-    def normalize(text):
-        # Confronto "morbido": ignora maiuscole/minuscole, spazi e
-        # punteggiatura finale — MyMemory a volte restituisce la stessa
-        # frase quasi identica (es. con un punto finale aggiunto) quando
-        # prova a tradurla nella direzione sbagliata, e questo va scartato
-        # come falso positivo, non aggiunto come parola "nuova".
-        return re.sub(r"[\s.!?]+$", "", text.strip().lower())
+    Restituisce (elenco_ampliato, traduzioni):
+    - elenco_ampliato: le parole originali più tutte le traduzioni valide
+      trovate, senza limiti — usato per il confronto sulle pagine
+      monitorate (check_watch_pages), che non ha un tetto a quante parole
+      usare e può trovarsi davanti pagine sia in italiano che in inglese.
+    - traduzioni: un dizionario {parola originale: sua traduzione migliore},
+      usato da main() per costruire la ricerca su Horizon Europe — una
+      fonte in lingua inglese con un budget limitato di richieste (una per
+      parola chiave), per cui conviene usare la versione inglese quando
+      disponibile invece di spendere due richieste sulla stessa idea."""
+    if not keywords:
+        return keywords, {}
 
     expanded = list(keywords)
-    seen_norm = {normalize(k) for k in expanded}
+    seen_norm = {_normalize_kw(k) for k in expanded}
+    translations = {}
     attempts = 0
     failures = 0
+    discarded_low_quality = 0
     for kw in keywords[:8]:  # limite prudente per non consumare troppa quota gratuita
+        best_text, best_score = None, -1.0
         for langpair in ("it|en", "en|it"):
             attempts += 1
             try:
@@ -507,16 +560,62 @@ def expand_keywords_with_translation(keywords):
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                translated = (data.get("responseData") or {}).get("translatedText")
-                if translated and normalize(translated) not in seen_norm:
-                    expanded.append(translated)
-                    seen_norm.add(normalize(translated))
+                response_data = data.get("responseData") or {}
+                translated = response_data.get("translatedText")
+                match_value = response_data.get("match")
+                if not _is_usable_translation(kw, translated, match_value):
+                    if translated:
+                        discarded_low_quality += 1
+                    continue
+                try:
+                    score = float(match_value)
+                except (TypeError, ValueError):
+                    score = 0.0
+                if score > best_score:
+                    best_text, best_score = translated, score
             except Exception:
                 failures += 1
                 continue
-    print("Traduzione automatica parole chiave: {} nuove parole aggiunte, {} tentativi falliti su {}.".format(
-        len(expanded) - len(keywords), failures, attempts))
-    return expanded
+        if best_text and _normalize_kw(best_text) not in seen_norm:
+            expanded.append(best_text)
+            seen_norm.add(_normalize_kw(best_text))
+            translations[kw] = best_text
+
+    print(
+        "Traduzione automatica parole chiave: {} nuove parole aggiunte, "
+        "{} scartate (bassa affidabilità, quota esaurita, o identiche al testo di partenza), "
+        "{} tentativi falliti su {}.".format(
+            len(expanded) - len(keywords), discarded_low_quality, failures, attempts)
+    )
+    return expanded, translations
+
+
+def build_horizon_terms(keywords, translations, limit=6):
+    """Costruisce l'elenco di termini da cercare su Horizon Europe entro il
+    budget di richieste disponibile (una per termine, vedi
+    search_funding_tenders_portal). A differenza di prima — appendere e
+    basta le traduzioni in coda, che le tagliava fuori non appena c'erano
+    6 o più parole chiave originali (proprio i casi in cui contano di
+    più) — prima passata: un termine per concetto, preferendo la
+    traduzione inglese quando disponibile e affidabile, così ogni concetto
+    arriva in ricerca almeno una volta anche con molte parole chiave;
+    seconda passata: se restano posti liberi nel budget (poche parole
+    chiave), aggiunge anche la versione nell'altra lingua degli stessi
+    concetti, per non sprecare richieste inutilizzate."""
+    terms = []
+    seen = set()
+
+    def add(term):
+        if term and term not in seen and len(terms) < limit:
+            terms.append(term)
+            seen.add(term)
+
+    for kw in keywords:
+        add(translations.get(kw, kw))
+    for kw in keywords:
+        if kw in translations:
+            add(kw)
+    return terms
 
 
 def fetch_page_text(url):
@@ -781,16 +880,20 @@ def main():
     keywords = config.get("keywords") or ["migrazione", "lavoro agricolo", "migrant labour agriculture"]
     print("Scansione in corso con parole chiave: {}".format(keywords))
 
-    search_keywords = expand_keywords_with_translation(keywords)
+    search_keywords, translations = expand_keywords_with_translation(keywords)
     if search_keywords != keywords:
         print("Parole chiave ampliate con traduzione automatica: {}".format(search_keywords))
+
+    horizon_terms = build_horizon_terms(keywords, translations)
+    if horizon_terms != search_keywords[:len(horizon_terms)]:
+        print("Termini usati per la ricerca su Horizon Europe: {}".format(horizon_terms))
 
     previous_hashes = meta.get("pageHashes", {})
 
     sources_checked = []
     all_new_items = []
 
-    horizon_items, horizon_stats = search_funding_tenders_portal(search_keywords)
+    horizon_items, horizon_stats = search_funding_tenders_portal(horizon_terms)
     horizon_ids_now = {item["id"] for item in horizon_items}
     sources_checked.append(
         "Horizon Europe / Funding & Tenders Portal: {} risultati ({}/{} parole chiave riuscite)".format(
