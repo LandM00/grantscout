@@ -9,6 +9,6 @@
 // Il peggio che può succedere se qualcuno trova questi due valori è che
 // lanci scansioni a vuoto: fastidioso ma innocuo.
 window.SCAN_CONFIG = {
-  workerUrl: "INCOLLA_QUI_URL_DEL_WORKER",
-  sharedSecret: "INCOLLA_QUI_LA_PASSWORD_CONDIVISA"
+  workerUrl: "https://grantscout-scan-trigger.matteolandolfo97.workers.dev",
+  sharedSecret: "579adebd930722194d3b0dc6fc079a0d18302481"
 };
