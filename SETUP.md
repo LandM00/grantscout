@@ -153,47 +153,71 @@ sito, poi richiederà di nuovo il codice.
 Il pulsante "Avvia scansione ora" (sotto le impostazioni ricerca) può
 lanciare la scansione direttamente dall'app, senza passare dalla scheda
 Actions di GitHub — utile se vuoi provare più argomenti di ricerca uno
-dopo l'altro in pochi minuti. Per attivarlo:
+dopo l'altro in pochi minuti.
 
-1. Su GitHub vai su **github.com/settings/tokens?type=beta** → **Generate
-   new token**.
-2. Dai un nome al token (es. "grantscout-scan-trigger") e imposta una
-   scadenza (consigliato: qualche mese, poi lo rigeneri).
-3. **Repository access** → **Only select repositories** → scegli solo
-   questo repository.
-4. **Permissions** → **Repository permissions** → **Actions** → imposta
-   **Read and write**. Lascia tutto il resto su "No access" (soprattutto
-   NON dare accesso a "Contents" o "Secrets").
-5. **Generate token** e copia il valore (inizia con `github_pat_...`) —
-   non lo rivedrai più dopo aver lasciato la pagina.
-6. Apri `docs/github-config.js` nel progetto e incolla il token al posto
-   di `INCOLLA_QUI_IL_TUO_TOKEN_GITHUB`. Se il nome utente/organizzazione
-   o il nome del repository su GitHub sono diversi da quelli già scritti
-   nel file, aggiorna anche `owner` e `repo`.
+**Nota**: una prima versione di questa funzione metteva il token di
+GitHub direttamente nel codice del sito. GitHub lo ha rilevato appena
+pubblicato e lo ha revocato automaticamente in pochi secondi (lo fa per
+qualunque suo token trovato in un repository pubblico, anche se lo
+autorizzi tu dal blocco "push protection") — quindi quell'approccio non
+funziona proprio, non solo "è rischioso". Questa versione tiene invece
+il token vero fuori dal repository, dentro un piccolo servizio esterno
+gratuito ("Cloudflare Worker") che fa da intermediario.
+
+1. Crea un account gratuito su **cloudflare.com** (non serve carta di
+   credito per il piano Workers gratuito).
+2. Nel pannello Cloudflare, vai su **Workers & Pages** → **Create** →
+   **Create Worker**. Dai un nome (es. "grantscout-scan-trigger") →
+   **Deploy** (per ora con il codice di esempio, lo sostituiamo subito).
+3. Apri il Worker appena creato → **Edit code**, cancella tutto il
+   contenuto e incolla il file `cloudflare-worker/scan-trigger.js` di
+   questo repository → **Deploy**.
+4. Torna alla pagina del Worker → **Settings** → **Variables and
+   Secrets** → **Add**:
+   - `GITHUB_TOKEN` (tipo **Secret**): un NUOVO fine-grained personal
+     access token GitHub (**github.com/settings/tokens?type=beta** →
+     Generate new token → Repository access: solo questo repository →
+     Permissions → Actions → **Read and write**, tutto il resto su "No
+     access"). Non lo metterai mai nel codice del sito, quindi qui può
+     restare il vero token.
+   - `SCAN_SHARED_SECRET` (tipo **Secret**): una password a piacere che
+     userà solo l'app per "presentarsi" al Worker (non è un token
+     GitHub, quindi anche se trapelasse il danno massimo è che qualcuno
+     lanci scansioni a vuoto). Puoi usare questa, già generata per te:
+     `579adebd930722194d3b0dc6fc079a0d18302481` — oppure inventane
+     un'altra.
+   Salva.
+5. In cima alla pagina del Worker copia il suo indirizzo pubblico (una
+   URL tipo `https://grantscout-scan-trigger.<tuo-nome>.workers.dev`).
+6. Apri `docs/scan-config.js` nel progetto e incolla lì:
+   - `workerUrl`: l'indirizzo copiato al punto 5;
+   - `sharedSecret`: la stessa password messa in `SCAN_SHARED_SECRET`
+     al punto 4.
 7. Salva, fai commit e push.
 8. Su "Impostazioni ricerca", sblocca con il codice di accesso e premi
    "Avvia scansione ora": dopo qualche secondo dovresti vedere il
    messaggio di conferma, e dopo 1-3 minuti i nuovi risultati.
 
-**Importante sulla sicurezza**: questo token finisce nel codice del sito,
-quindi è visibile a chiunque lo guardi (è così per qualunque sito
-statico come questo — non c'è un modo per nasconderlo davvero senza un
-server proprio). Con i permessi indicati sopra (solo "Actions" su questo
-repository) il rischio peggiore se qualcuno lo trovasse è che lanci
-scansioni a vuoto: fastidioso ma innocuo, perché non permette di leggere
-o modificare il codice, i segreti o altri dati del progetto, e i minuti
-di GitHub Actions sono comunque gratuiti sui repository pubblici. Se non
-configuri questo token, il pulsante ti avvisa e resta comunque possibile
-lanciare la scansione a mano dalla scheda Actions di GitHub, come prima.
+**Sulla sicurezza**: con questo schema il token GitHub vero non tocca
+mai il repository né il codice del sito — resta solo dentro le
+"Secrets" di Cloudflare, che non sono mai visibili pubblicamente. Nel
+codice del sito finisce solo `sharedSecret`, una password a basso
+rischio che il Worker controlla prima di accettare qualunque richiesta:
+anche se qualcuno la trovasse, potrebbe solo lanciare scansioni a
+vuoto — fastidioso ma innocuo, e comunque gratuito sui repository
+pubblici. Se non configuri `docs/scan-config.js`, il pulsante ti avvisa
+e resta comunque possibile lanciare la scansione a mano dalla scheda
+Actions di GitHub, come prima.
 
 ---
 
 ## Limiti da conoscere (onestà prima di tutto)
 
 - **Il pulsante "Avvia scansione ora"** funziona solo se hai configurato
-  il token in `docs/github-config.js` (punto 14): altrimenti ti avvisa e
-  la scansione va lanciata a mano dalla scheda Actions di GitHub (come al
-  punto 10) — un'operazione che richiede accesso a GitHub.
+  `docs/scan-config.js` e il Worker Cloudflare (punto 14): altrimenti ti
+  avvisa e la scansione va lanciata a mano dalla scheda Actions di
+  GitHub (come al punto 10) — un'operazione che richiede accesso a
+  GitHub.
 - **Anche con il pulsante configurato**, il risultato non è immediato: la
   scansione vera gira su GitHub Actions e di solito ci vogliono 1-3
   minuti prima che compaiano i nuovi risultati nell'app.
