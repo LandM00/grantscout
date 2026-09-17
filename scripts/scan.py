@@ -870,6 +870,20 @@ def fetch_page_text(url):
             raise direct_exc
 
 
+# Termini tipici di un vero bando (non di una notizia generica che cita
+# solo la parola chiave): una pagina scatta solo se ne contiene almeno
+# uno, vedi check_watch_pages. Lista volutamente corta e in italiano +
+# inglese (per fonti internazionali tipo COST/IMISCOE), non è pensata
+# per essere esaustiva.
+BANDO_SIGNAL_PHRASES = [
+    "bando", "avviso pubblico", "scadenza", "candidatura", "candidature",
+    "presentazione delle domande", "domanda di partecipazione",
+    "requisiti di partecipazione", "graduatoria",
+    "call for proposals", "call for applications", "how to apply",
+    "eligibility criteria", "application deadline", "submission deadline",
+]
+
+
 def check_watch_pages(keywords, previous_hashes, sources):
     """Per ogni pagina in 'sources' (da Firestore): scarica il testo e
     controlla se contiene una delle parole chiave scelte dall'utente. Non
@@ -878,6 +892,19 @@ def check_watch_pages(keywords, previous_hashes, sources):
     pagina sia cambiata non basta più): questo evita falsi allarmi
     quando si cambia argomento di ricerca ma una fonte fissa cambia per
     conto suo (es. una data o un banner).
+
+    Oltre alla parola chiave, richiediamo anche che la pagina contenga
+    almeno un termine tipico di un bando vero (BANDO_SIGNAL_PHRASES, es.
+    "scadenza", "candidatura", "call for proposals"): serve a scartare
+    pagine che citano la parola chiave solo in una notizia o in un
+    contesto generico, senza essere davvero un'opportunità a cui
+    candidarsi. ATTENZIONE: è un compromesso esplicito, non infallibile —
+    una pagina che descrive un vero bando con un linguaggio insolito
+    (nessuno dei termini elencati) può non essere segnalata. È
+    l'opposto della scelta fatta altrove in questo file (dove si
+    preferisce un falso positivo in più a un falso negativo): qui
+    l'utente ha chiesto esplicitamente di ridurre le notizie irrilevanti
+    anche a costo di perdere qualche bando scritto in modo insolito.
 
     Oltre ai risultati, restituisce anche `page_status`: un elenco con
     l'esito (raggiunta o no, ed eventuale errore) di OGNI pagina
@@ -909,9 +936,17 @@ def check_watch_pages(keywords, previous_hashes, sources):
             if not matched_keywords:
                 continue  # nessuna parola chiave trovata: niente da segnalare
 
+            matched_signal = next(
+                (sig for sig in BANDO_SIGNAL_PHRASES if keyword_matches_text(sig, page_tokens)),
+                None,
+            )
+            if not matched_signal:
+                continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
+
             note_parts = []
             if matched_keywords:
                 note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
+            note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
             if changed:
                 note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
             summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
