@@ -432,6 +432,16 @@ def search_funding_tenders_portal(keywords):
         title_tokens = _tokenize(item["title"].lower())
         if not any(keyword_matches_text(t, title_tokens) for t in found_terms):
             continue  # nessuna parola chiave nel titolo del bando: probabilmente non pertinente
+        if item.get("status") == "closed":
+            # Verificato a mano (settembre 2026): il filtro "stato" dell'API
+            # (vedi commento sopra) non e' affidabile fino in fondo -- puo'
+            # restituire un bando con scadenza passata da quasi due anni pur
+            # avendogli chiesto esplicitamente solo bandi aperti/in arrivo.
+            # Lo stato "closed" qui e' calcolato da noi dalla vera data di
+            # scadenza (status_from_deadline), quindi e' affidabile: se dice
+            # chiuso, e' chiuso per davvero. Non ha senso mostrarlo: non ci si
+            # puo' piu' candidare, quindi e' solo rumore nella lista.
+            continue
         match_score = compute_match_score(found_terms)
         relevance_tag = relevance_label(match_score)
         if relevance_tag:
