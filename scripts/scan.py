@@ -730,20 +730,48 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _MIN_LEN_FOR_STEM = 5
 
 
+# Suffissi italiani che formano un sostantivo a partire da un verbo (es.
+# "irrigare" -> "irrigazione", "investire" -> "investimento"): se una
+# parola chiave finisce con uno di questi, la radice usata per il
+# confronto e' la parola SENZA il suffisso, cosi si riconoscono anche le
+# altre forme della stessa famiglia (aggettivo, participio, plurale) che
+# il solo taglio di una vocale finale non prendeva -- verificato un caso
+# reale: cercando "irrigazione" non veniva trovato un bando che parlava
+# solo di "investimenti irrigui"/"superficie irrigata", stessa famiglia
+# di parole ma radice diversa con il vecchio confronto.
+#
+# _MIN_STEM_RESULT_LEN evita di applicare il taglio quando la radice
+# risultante sarebbe troppo corta e quindi rischiosa (es. "nazione" -
+# "azione" darebbe solo "n", che troverebbe quasi qualsiasi parola):
+# in quel caso si torna al taglio della sola vocale finale, come prima.
+_DERIVATIONAL_SUFFIXES = ("azione", "izione", "amento", "imento")
+_MIN_STEM_RESULT_LEN = 5
+
+
 def _stem(word):
     """Approssima la radice di una parola per riconoscere le variazioni piu
     comuni di plurale/genere, invece di richiedere un confronto letterale
     identico (il comportamento precedente: "migrante" non trovava
     "migranti", "agricola" non trovava "agricole"). Toglie l'ultima
     lettera se e una vocale (variazioni italiane piu comuni: -a/-e/-i/-o)
-    o una "s" finale (plurale inglese: migrant/migrants).
+    o una "s" finale (plurale inglese: migrant/migrants) — oppure, per le
+    parole che finiscono con uno dei suffissi in _DERIVATIONAL_SUFFIXES,
+    toglie l'intero suffisso (vedi commento sopra).
 
     Non e un vero stemmer linguistico (userebbe librerie NLP che
     appesantirebbero un progetto pensato per restare semplice e gratuito):
     e deliberatamente permissivo, perche ogni segnalazione di questa app
     va comunque verificata a mano — un falso positivo in piu costa una
     verifica in piu, un falso negativo fa perdere un'opportunita reale
-    senza che l'utente se ne accorga mai."""
+    senza che l'utente se ne accorga mai. ATTENZIONE: e' comunque un
+    compromesso, non un confronto "intelligente" — resta possibile che
+    due parole con la stessa radice approssimata siano in realta
+    concetti diversi (es. "nazione"/"condizione" sono protette apposta
+    dalla soglia _MIN_STEM_RESULT_LEN, ma casi simili non previsti qui
+    potrebbero non esserlo)."""
+    for suffix in _DERIVATIONAL_SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= _MIN_STEM_RESULT_LEN:
+            return word[: -len(suffix)]
     if len(word) > _MIN_LEN_FOR_STEM and word[-1] in "aeious":
         return word[:-1]
     return word
