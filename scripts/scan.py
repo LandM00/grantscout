@@ -48,6 +48,7 @@ import re
 import sys
 from collections import deque
 from datetime import datetime, timezone
+from urllib.parse import urljoin
 
 import requests
 
@@ -359,68 +360,85 @@ def search_funding_tenders_portal(keywords):
             }
         }
     }
+    # Limite di sicurezza sul numero di pagine richieste all'API per ogni
+    # parola chiave. Prima veniva sempre e solo richiesta la prima pagina
+    # (pageNumber fisso a 1): un bando pertinente presente solo "più in
+    # là" (es. il 16-esimo risultato per quella parola, con pagine da 15)
+    # non veniva mai visto. Ora si richiedono altre pagine finché quella
+    # appena ricevuta è piena (segno che potrebbe essercene un'altra),
+    # fino a HORIZON_MAX_PAGES pagine per parola chiave: un limite tenuto
+    # basso apposta per non appesantire troppo ogni scansione, dato che
+    # in pratica risultati pertinenti oltre la 1a-2a pagina sono rari.
+    HORIZON_PAGE_SIZE = 15
+    HORIZON_MAX_PAGES = 4
     for term in terms:
-        params = {"apiKey": "SEDIA", "text": '"{}"'.format(term), "pageSize": 15, "pageNumber": 1}
-        try:
-            resp = requests.post(url, params=params, json=body, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-            hits = (data.get("results") or data.get("hits") or [])
-            for hit in hits:
-                # L'API mescola, sotto gli stessi risultati e nonostante il
-                # filtro "type"/"status" sopra, anche progetti UE GIA
-                # FINANZIATI (in corso o conclusi) la cui descrizione contiene
-                # semplicemente la parola chiave -- non bandi a cui ci si puo
-                # ancora candidare. Verificato a mano: per query tipiche circa
-                # 7 risultati su 10 erano di questo tipo, non bandi veri.
-                # Si distinguono in modo affidabile dal campo "database": solo
-                # i temi/bandi veri del portale hanno database == "SEDIA"; un
-                # progetto gia finanziato ha questo campo assente. Li
-                # scartiamo qui, altrimenti la maggior parte delle
-                # segnalazioni sarebbe rumore su iniziative non piu aperte.
-                if hit.get("database") != "SEDIA":
-                    continue
-                fields = hit.get("metadata", hit)
-                title = _first(fields, ["title", "callTitle"]) or "Bando Horizon Europe"
-                identifier = _first(fields, ["identifier", "callIdentifier", "reference"])
-                deadline_date = _parse_date(_first(fields, ["deadlineDate", "deadline"]))
-                item_id = "horizon-" + slugify(identifier or title)
-                found_terms = matched_terms_by_id.setdefault(item_id, [])
-                if term not in found_terms:
-                    found_terms.append(term)
-                if item_id in items_by_id:
-                    continue  # titolo/scadenza/etc. già salvati: qui serviva solo registrare il termine
-                items_by_id[item_id] = {
-                    "id": item_id,
-                    "title": title if not identifier else "{} ({})".format(title, identifier),
-                    "funder": "Commissione Europea — Horizon Europe / Funding & Tenders Portal",
-                    "category": "funding",
-                    # Il filtro "stato" dell'API (non ufficiale) non è affidabile:
-                    # a volte restituisce anche call scadute da anni etichettate
-                    # come aperte. Calcoliamo lo stato noi, dalla scadenza vera.
-                    "status": status_from_deadline(deadline_date),
-                    "deadlineDate": deadline_date,
-                    "tags": ["UE", "Horizon Europe"],
-                    # ATTENZIONE: lo schema "calls-for-proposals?callIdentifier=..."
-                    # usato qui in precedenza NON porta piu da nessuna parte -- il
-                    # portale (verificato a mano) lo ignora e mostra sempre e solo
-                    # la home page vuota, qualunque identificativo gli si passi.
-                    # Lo schema corretto, verificato sia su bandi Horizon Europe
-                    # aperti che su bandi H2020 chiusi da anni, e
-                    # ".../topic-details/<identifier>". Il campo "url" che l'API
-                    # stessa a volte restituisce non e affidabile allo stesso modo:
-                    # per i bandi piu vecchi punta a un endpoint JSON grezzo (non a
-                    # una pagina leggibile), quindi costruiamo il link noi.
-                    "url": (
-                        "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/" + identifier
-                        if identifier else
-                        "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home"
-                    ),
-                    "source": "funding-tenders-api",
-                }
-        except Exception as exc:  # noqa: BLE001 — vogliamo continuare comunque
-            print("Avviso: ricerca su Funding & Tenders Portal per \"{}\" non riuscita ({}). Salto questo termine.".format(term, exc))
-            errors.append({"term": term, "error": str(exc)})
+        page_number = 1
+        while page_number <= HORIZON_MAX_PAGES:
+            params = {"apiKey": "SEDIA", "text": '"{}"'.format(term), "pageSize": HORIZON_PAGE_SIZE, "pageNumber": page_number}
+            try:
+                resp = requests.post(url, params=params, json=body, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+                hits = (data.get("results") or data.get("hits") or [])
+                for hit in hits:
+                    # L'API mescola, sotto gli stessi risultati e nonostante il
+                    # filtro "type"/"status" sopra, anche progetti UE GIA
+                    # FINANZIATI (in corso o conclusi) la cui descrizione contiene
+                    # semplicemente la parola chiave -- non bandi a cui ci si puo
+                    # ancora candidare. Verificato a mano: per query tipiche circa
+                    # 7 risultati su 10 erano di questo tipo, non bandi veri.
+                    # Si distinguono in modo affidabile dal campo "database": solo
+                    # i temi/bandi veri del portale hanno database == "SEDIA"; un
+                    # progetto gia finanziato ha questo campo assente. Li
+                    # scartiamo qui, altrimenti la maggior parte delle
+                    # segnalazioni sarebbe rumore su iniziative non piu aperte.
+                    if hit.get("database") != "SEDIA":
+                        continue
+                    fields = hit.get("metadata", hit)
+                    title = _first(fields, ["title", "callTitle"]) or "Bando Horizon Europe"
+                    identifier = _first(fields, ["identifier", "callIdentifier", "reference"])
+                    deadline_date = _parse_date(_first(fields, ["deadlineDate", "deadline"]))
+                    item_id = "horizon-" + slugify(identifier or title)
+                    found_terms = matched_terms_by_id.setdefault(item_id, [])
+                    if term not in found_terms:
+                        found_terms.append(term)
+                    if item_id in items_by_id:
+                        continue  # titolo/scadenza/etc. già salvati: qui serviva solo registrare il termine
+                    items_by_id[item_id] = {
+                        "id": item_id,
+                        "title": title if not identifier else "{} ({})".format(title, identifier),
+                        "funder": "Commissione Europea — Horizon Europe / Funding & Tenders Portal",
+                        "category": "funding",
+                        # Il filtro "stato" dell'API (non ufficiale) non è affidabile:
+                        # a volte restituisce anche call scadute da anni etichettate
+                        # come aperte. Calcoliamo lo stato noi, dalla scadenza vera.
+                        "status": status_from_deadline(deadline_date),
+                        "deadlineDate": deadline_date,
+                        "tags": ["UE", "Horizon Europe"],
+                        # ATTENZIONE: lo schema "calls-for-proposals?callIdentifier=..."
+                        # usato qui in precedenza NON porta piu da nessuna parte -- il
+                        # portale (verificato a mano) lo ignora e mostra sempre e solo
+                        # la home page vuota, qualunque identificativo gli si passi.
+                        # Lo schema corretto, verificato sia su bandi Horizon Europe
+                        # aperti che su bandi H2020 chiusi da anni, e
+                        # ".../topic-details/<identifier>". Il campo "url" che l'API
+                        # stessa a volte restituisce non e affidabile allo stesso modo:
+                        # per i bandi piu vecchi punta a un endpoint JSON grezzo (non a
+                        # una pagina leggibile), quindi costruiamo il link noi.
+                        "url": (
+                            "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/" + identifier
+                            if identifier else
+                            "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home"
+                        ),
+                        "source": "funding-tenders-api",
+                    }
+            except Exception as exc:  # noqa: BLE001 — vogliamo continuare comunque
+                print("Avviso: ricerca su Funding & Tenders Portal per \"{}\" non riuscita ({}). Salto questo termine (pagina {}).".format(term, exc, page_number))
+                errors.append({"term": term, "error": str(exc)})
+                break
+            if len(hits) < HORIZON_PAGE_SIZE:
+                break  # pagina non piena: non ce ne sono altre da chiedere
+            page_number += 1
 
     # Solo ora, con TUTTE le parole chiave di ciascun bando raccolte,
     # calcoliamo punteggio ed etichetta di rilevanza e componiamo il
@@ -908,6 +926,101 @@ def fetch_page_text(url):
             raise direct_exc
 
 
+def fetch_page_html(url):
+    """Come fetch_page_text, ma restituisce l'HTML grezzo (serve per poter
+    trovare i singoli link della pagina, non solo il suo testo) invece del
+    testo "pulito". Usata solo per l'arricchimento facoltativo in
+    extract_matching_links: se la richiesta diretta fallisce (o il sito
+    risponde solo tramite il servizio di ripiego, che restituisce testo
+    gia' semplificato e non piu' HTML), restituisce semplicemente None
+    invece di solleva un'eccezione -- niente di questa funzione deve mai
+    far fallire lo scan: la card generica esistente resta comunque la
+    base sicura anche se qui non si riesce ad estrarre nulla."""
+    try:
+        resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        return resp.text
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Testo di link di navigazione/istituzionali troppo generici perche' un
+# loro eventuale match con una parola chiave sia interessante (es. il
+# link "Cerca" di un motore di ricerca interno che casualmente contiene
+# la parola "bando" da qualche parte nel markup circostante). Elenco
+# volutamente corto: in caso di dubbio si preferisce mostrare un link in
+# piu' da verificare a mano, piuttosto che rischiare di scartarne uno
+# vero (stessa filosofia usata altrove in questo file).
+_NAV_LINK_TEXT_BLOCKLIST = {
+    "home", "homepage", "contatti", "contattaci", "privacy", "cookie",
+    "note legali", "accessibilita", "accessibilit\u00e0", "mappa del sito",
+    "sitemap", "accedi", "login", "area riservata", "cerca", "menu",
+    "italiano", "english", "facebook", "twitter", "linkedin", "instagram",
+    "youtube", "rss", "torna su", "vai al contenuto", "salta al contenuto",
+}
+
+# Massimo numero di link specifici mostrati per una singola fonte fissa:
+# una pagina elenco molto ricca potrebbe altrimenti produrre una card
+# enorme; oltre questa soglia meglio invitare a controllare la pagina
+# intera a mano (il link alla pagina completa resta comunque sempre
+# presente in coda alla card, vedi check_watch_pages).
+MAX_WATCH_MATCH_ITEMS = 8
+
+
+def extract_matching_links(html, base_url, keywords):
+    """Cerca, tra tutti i link <a> della pagina, quelli che sembrano
+    puntare a un bando specifico pertinente: il testo del link stesso, o
+    quello del suo elemento contenitore (riga di tabella/elemento di
+    lista/paragrafo -- serve perche' spesso il link dice solo "Scopri di
+    piu'" e la parola chiave e' nel testo a fianco), deve contenere sia
+    una parola chiave sia un segnale tipico di bando vero
+    (BANDO_SIGNAL_PHRASES, stesso criterio gia' usato a livello di intera
+    pagina). Restituisce un elenco di {"title", "url"} (senza doppioni
+    per URL, max MAX_WATCH_MATCH_ITEMS), oppure una lista vuota se non
+    trova nulla di specifico -- in quel caso chi chiama continua a
+    mostrare solo la card generica di sempre, senza regressioni.
+
+    ATTENZIONE: e' un arricchimento best-effort, non un parser affidabile
+    al 100% -- ogni sito struttura le sue pagine elenco in modo diverso,
+    quindi puo' non trovare nulla anche quando un elenco di bandi c'e'
+    davvero (falso negativo qui = si torna alla card generica, non e'
+    un problema) oppure, piu' raramente, includere un link non davvero
+    pertinente (va comunque verificato a mano come ogni altra
+    segnalazione di questa app)."""
+    if BeautifulSoup is None or not html:
+        return []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:  # noqa: BLE001
+        return []
+    seen_urls = set()
+    items = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:")):
+            continue
+        text = a.get_text(" ", strip=True)
+        if not text or len(text) < 4:
+            continue
+        if text.strip().lower() in _NAV_LINK_TEXT_BLOCKLIST:
+            continue
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+        parent = a.find_parent(["li", "tr", "div", "p", "article"])
+        context_text = parent.get_text(" ", strip=True) if parent is not None else text
+        context_tokens = _tokenize(context_text.lower())
+        if not any(kw and keyword_matches_text(kw, context_tokens) for kw in keywords):
+            continue
+        if not any(keyword_matches_text(sig, context_tokens) for sig in BANDO_SIGNAL_PHRASES):
+            continue
+        seen_urls.add(absolute_url)
+        items.append({"title": text[:160], "url": absolute_url})
+        if len(items) >= MAX_WATCH_MATCH_ITEMS:
+            break
+    return items
+
+
 # Termini tipici di un vero bando (non di una notizia generica che cita
 # solo la parola chiave): una pagina scatta solo se ne contiene almeno
 # uno, vedi check_watch_pages. Lista volutamente corta e in italiano +
@@ -981,13 +1094,34 @@ def check_watch_pages(keywords, previous_hashes, sources):
             if not matched_signal:
                 continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
 
+            # Arricchimento facoltativo: proviamo a individuare i singoli
+            # link della pagina che riguardano davvero una parola chiave,
+            # invece di lasciare solo il link generico all'intera pagina.
+            # Richiede l'HTML grezzo (fetch_page_html), diverso dal testo
+            # "pulito" usato sopra per hash/parole chiave/segnale -- se non
+            # e' disponibile (o non trova nulla di specifico) restiamo sul
+            # comportamento di sempre: nessuna regressione.
+            match_items = []
+            try:
+                page_html = fetch_page_html(page["url"])
+                if page_html:
+                    match_items = extract_matching_links(page_html, page["url"], matched_keywords)
+            except Exception:  # noqa: BLE001
+                match_items = []
+
             note_parts = []
             if matched_keywords:
                 note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
             note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
             if changed:
                 note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
-            summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
+            if match_items:
+                summary = (
+                    "Trovati {} link specifici in questa pagina che contengono le tue parole chiave "
+                    "(vedi elenco sotto) — " + "; ".join(note_parts) + "."
+                ).format(len(match_items))
+            else:
+                summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
 
             # Punteggio di rilevanza: 0 se il "segnale" è solo il
             # cambiamento di contenuto (nessuna parola chiave — spesso
@@ -1011,6 +1145,10 @@ def check_watch_pages(keywords, previous_hashes, sources):
                 "matchScore": match_score,
                 "url": page["url"],
                 "source": "page-watcher",
+                # Elenco di link specifici trovati su questa pagina (puo'
+                # essere vuoto: in quel caso l'app mostra solo il link
+                # generico alla pagina intera, come faceva finora).
+                "matches": match_items,
             })
         except Exception as exc:  # noqa: BLE001
             print("Avviso: impossibile controllare {} ({}). Salto.".format(page["url"], exc))

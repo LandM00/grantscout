@@ -158,6 +158,10 @@
   .tag{ font-size:11px; background:var(--surface-alt); color:var(--ink-muted); padding:3px 8px; border-radius:5px; }
   .card a.go{ font-size:13px; font-weight:600; color:var(--accent2); text-decoration:none; border-bottom:1px solid transparent; }
   .card a.go:hover{border-bottom-color:var(--accent2);}
+  .match-list{ margin:0 0 12px; padding:10px 12px; background:var(--surface-alt); border-radius:8px; display:flex; flex-direction:column; gap:7px; }
+  .match-list a.match-item{ font-size:13px; color:var(--accent2); text-decoration:none; line-height:1.4; display:block; }
+  .match-list a.match-item:hover{ text-decoration:underline; }
+  .match-list a.match-item::before{ content:"\2192  "; color:var(--ink-muted); text-decoration:none; }
   .empty, .loading{
     font-size:13.5px; color:var(--ink-muted); padding:18px; border:1px dashed var(--line); border-radius:10px; background:var(--surface);
   }
@@ -306,6 +310,22 @@
     }
     var tags = (call.tags || []).map(function(t){ return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join("");
     var amountRow = call.amount ? '<span>Importo: <b>' + escapeHtml(call.amount) + '</b></span>' : "";
+    // Le fonti fisse (pagine elenco) possono ora arrivare con "matches":
+    // uno o piu' link specifici individuati su quella pagina, invece del
+    // solo link generico all'intera pagina (vedi extract_matching_links in
+    // scripts/scan.py). Se e' vuoto/assente (es. pagina con un solo bando,
+    // o bandi Horizon Europe che non hanno mai questo campo), il comporta-
+    // mento resta quello di sempre: un unico link "Vedi il bando".
+    var matches = Array.isArray(call.matches) ? call.matches : [];
+    var matchListHtml = matches.length ? (
+      '<div class="match-list">' +
+        matches.map(function(m){
+          return '<a class="match-item" href="' + escapeHtml(m.url) + '" target="_blank" rel="noopener">' +
+            escapeHtml(m.title || m.url) + '</a>';
+        }).join("") +
+      '</div>'
+    ) : "";
+    var mainLinkLabel = matches.length ? "Vedi la pagina completa →" : "Vedi il bando →";
     return '' +
       '<div class="card">' +
         '<div class="card-top">' +
@@ -319,7 +339,8 @@
           amountRow +
         '</div>' +
         (tags ? '<div class="tags">' + tags + '</div>' : '') +
-        (call.url ? '<a class="go" href="' + escapeHtml(call.url) + '" target="_blank" rel="noopener">Vedi il bando →</a>' : '') +
+        matchListHtml +
+        (call.url ? '<a class="go" href="' + escapeHtml(call.url) + '" target="_blank" rel="noopener">' + mainLinkLabel + '</a>' : '') +
       '</div>';
   }
 
