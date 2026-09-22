@@ -1113,69 +1113,88 @@ def check_watch_pages(keywords, previous_hashes, sources):
             if not matched_keywords:
                 continue  # nessuna parola chiave trovata: niente da segnalare
 
-            matched_signal = next(
-                (sig for sig in BANDO_SIGNAL_PHRASES if keyword_matches_text(sig, page_tokens)),
-                None,
-            )
-            if not matched_signal:
-                continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
-
-            # Arricchimento facoltativo: proviamo a individuare i singoli
-            # link della pagina che riguardano davvero una parola chiave,
-            # invece di lasciare solo il link generico all'intera pagina.
-            # Richiede l'HTML grezzo (fetch_page_html), diverso dal testo
-            # "pulito" usato sopra per hash/parole chiave/segnale -- se non
-            # e' disponibile (o non trova nulla di specifico) restiamo sul
-            # comportamento di sempre: nessuna regressione.
-            match_items = []
+            # Da qui in poi la pagina e' stata GIA raggiunta e letta con successo
+            # (page_status sopra e' gia' "ok: True" per questo id): un errore nel
+            # resto dell'elaborazione (es. una fonte senza "title"/"category" in
+            # Firestore) riguarda solo il contenuto, non la raggiungibilita' della
+            # pagina. Isolato nel suo proprio try/except cosi', in caso di errore,
+            # si salta semplicemente la segnalazione per questa pagina SENZA
+            # aggiungere un secondo elemento a page_status per lo stesso id --
+            # altrimenti la stessa pagina risulterebbe contata sia come riuscita
+            # che come fallita nello stesso ciclo (bug reale trovato in un audit di
+            # robustezza: corrompeva i conteggi usati da compute_health).
             try:
-                page_html = fetch_page_html(page["url"])
-                if page_html:
-                    match_items = extract_matching_links(page_html, page["url"], matched_keywords)
-            except Exception:  # noqa: BLE001
+                matched_signal = next(
+                    (sig for sig in BANDO_SIGNAL_PHRASES if keyword_matches_text(sig, page_tokens)),
+                    None,
+                )
+                if not matched_signal:
+                    continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
+
+                # Arricchimento facoltativo: proviamo a individuare i singoli
+                # link della pagina che riguardano davvero una parola chiave,
+                # invece di lasciare solo il link generico all'intera pagina.
+                # Richiede l'HTML grezzo (fetch_page_html), diverso dal testo
+                # "pulito" usato sopra per hash/parole chiave/segnale -- se non
+                # e' disponibile (o non trova nulla di specifico) restiamo sul
+                # comportamento di sempre: nessuna regressione.
                 match_items = []
+                try:
+                    page_html = fetch_page_html(page["url"])
+                    if page_html:
+                        match_items = extract_matching_links(page_html, page["url"], matched_keywords)
+                except Exception:  # noqa: BLE001
+                    match_items = []
 
-            note_parts = []
-            if matched_keywords:
-                note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
-            note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
-            if changed:
-                note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
-            if match_items:
-                summary = (
-                    "Trovati {} link specifici in questa pagina che contengono le tue parole chiave "
-                    "(vedi elenco sotto) — " + "; ".join(note_parts) + "."
-                ).format(len(match_items))
-            else:
-                summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
+                note_parts = []
+                if matched_keywords:
+                    note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
+                note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
+                if changed:
+                    note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
+                if match_items:
+                    summary = (
+                        "Trovati {} link specifici in questa pagina che contengono le tue parole chiave "
+                        "(vedi elenco sotto) — " + "; ".join(note_parts) + "."
+                    ).format(len(match_items))
+                else:
+                    summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
 
-            # Punteggio di rilevanza: 0 se il "segnale" è solo il
-            # cambiamento di contenuto (nessuna parola chiave — spesso
-            # rumore, es. un banner o una data che cambia), altrimenti
-            # cresce con quante/quali parole chiave hanno trovato
-            # riscontro (vedi compute_match_score). Niente etichetta
-            # quando il punteggio è 0: non vogliamo far sembrare "debole"
-            # un segnale che in realtà non ha nessuna parola chiave dietro.
-            match_score = compute_match_score(matched_keywords)
-            relevance_tag = relevance_label(match_score)
+                # Punteggio di rilevanza: 0 se il "segnale" è solo il
+                # cambiamento di contenuto (nessuna parola chiave — spesso
+                # rumore, es. un banner o una data che cambia), altrimenti
+                # cresce con quante/quali parole chiave hanno trovato
+                # riscontro (vedi compute_match_score). Niente etichetta
+                # quando il punteggio è 0: non vogliamo far sembrare "debole"
+                # un segnale che in realtà non ha nessuna parola chiave dietro.
+                match_score = compute_match_score(matched_keywords)
+                relevance_tag = relevance_label(match_score)
 
-            results.append({
-                "id": "watch-" + page["id"],
-                "title": page["title"],
-                "funder": page["funder"],
-                "category": page["category"],
-                "status": "watch",
-                "deadlineText": "vedi pagina ufficiale",
-                "tags": ["da verificare"] + (["aggiornata"] if changed else []) + ([relevance_tag] if relevance_tag else []),
-                "summary": summary,
-                "matchScore": match_score,
-                "url": page["url"],
-                "source": "page-watcher",
-                # Elenco di link specifici trovati su questa pagina (puo'
-                # essere vuoto: in quel caso l'app mostra solo il link
-                # generico alla pagina intera, come faceva finora).
-                "matches": match_items,
-            })
+                results.append({
+                    "id": "watch-" + page["id"],
+                    # .get() con ripiego, non accesso diretto: una fonte aggiunta
+                    # senza titolo/categoria (es. a mano su Firestore, o con un
+                    # form futuro meno rigido) non deve far fallire l'intera
+                    # segnalazione -- meglio un titolo/categoria generici che
+                    # nessuna segnalazione.
+                    "title": page.get("title") or page.get("funder") or page["url"],
+                    "funder": page.get("funder", ""),
+                    "category": page.get("category") or "funding",
+                    "status": "watch",
+                    "deadlineText": "vedi pagina ufficiale",
+                    "tags": ["da verificare"] + (["aggiornata"] if changed else []) + ([relevance_tag] if relevance_tag else []),
+                    "summary": summary,
+                    "matchScore": match_score,
+                    "url": page["url"],
+                    "source": "page-watcher",
+                    # Elenco di link specifici trovati su questa pagina (puo'
+                    # essere vuoto: in quel caso l'app mostra solo il link
+                    # generico alla pagina intera, come faceva finora).
+                    "matches": match_items,
+                })
+            except Exception as exc:  # noqa: BLE001 -- vedi commento sopra: NON tocchiamo page_status qui
+                print("Avviso: pagina raggiunta ma elaborazione del contenuto non riuscita per {} ({}). Salto la segnalazione per questa pagina.".format(page["url"], exc))
+                continue
         except Exception as exc:  # noqa: BLE001
             print("Avviso: impossibile controllare {} ({}). Salto.".format(page["url"], exc))
             page_status.append({
@@ -1334,7 +1353,34 @@ def close_expired_calls(db):
 
 
 def main():
-    db = init_firestore()
+    try:
+        db = init_firestore()
+    except Exception as exc:  # noqa: BLE001
+        print("ERRORE FATALE: impossibile inizializzare la connessione a Firestore ({}: {}). Scansione annullata.".format(
+            type(exc).__name__, exc))
+        sys.exit(1)
+
+    try:
+        _run_scan(db)
+    except Exception as exc:  # noqa: BLE001 -- errore imprevisto in un punto qualsiasi dello scan: non deve sparire in
+        # silenzio. Lo registriamo (quando possibile) su Firestore stesso, cosi' chi
+        # apre l'app vede un motivo chiaro invece di un "ultima scansione" vecchio
+        # senza spiegazione, poi rilanciamo l'eccezione: GitHub Actions deve comunque
+        # segnare l'esecuzione come fallita (si vede nella scheda Actions).
+        print("ERRORE FATALE: la scansione si e' interrotta per un errore imprevisto: {}: {}".format(
+            type(exc).__name__, exc))
+        try:
+            db.collection("meta").document("status").set({
+                "lastRunCrashed": True,
+                "lastCrashAt": now_iso(),
+                "lastCrashError": "{}: {}".format(type(exc).__name__, exc),
+            }, merge=True)
+        except Exception:  # noqa: BLE001
+            print("(impossibile anche solo registrare l'errore su Firestore -- probabilmente Firestore stesso non e' raggiungibile in questo momento)")
+        raise
+
+
+def _run_scan(db):
     config = get_doc(db, "config", "main", default={"keywords": [], "frequency": DEFAULT_FREQUENCY})
     meta = get_doc(db, "meta", "status", default={})
 
@@ -1355,6 +1401,13 @@ def main():
         return
 
     keywords = config.get("keywords") or ["migrazione", "lavoro agricolo", "migrant labour agriculture"]
+    if isinstance(keywords, str):
+        # Difensivo: se per un motivo qualsiasi (bug futuro, modifica a mano su
+        # Firestore) "keywords" risultasse una stringa invece di un elenco,
+        # iterarci sopra direttamente la scomporrebbe carattere per carattere
+        # (ogni lettera trattata come parola chiave separata) invece di dare un
+        # errore chiaro -- la trattiamo come un'unica parola chiave.
+        keywords = [keywords]
     print("Scansione in corso con parole chiave: {}".format(keywords))
 
     search_keywords, translations = expand_keywords_with_translation(keywords)
@@ -1414,6 +1467,7 @@ def main():
 
     db.collection("meta").document("status").set({
         "lastRun": now_iso(),
+        "lastRunCrashed": False,
         "sourcesChecked": sources_checked,
         "pageHashes": new_hashes,
         "health": health,

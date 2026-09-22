@@ -1,6 +1,31 @@
 <!doctype html>
 <html lang="it">
 <head>
+<script>
+// La CDN di GitHub Pages (Fastly) puo' servire una copia vecchia di questa
+// pagina da un nodo edge specifico anche a lungo dopo un deploy riuscito --
+// non un problema di cache del browser (quella si pulisce con un hard
+// refresh), lato server. Verificato dal vivo: aggiungere un parametro
+// anti-cache all'URL basta a bypassare il nodo incriminato (per la CDN e'
+// un oggetto diverso, quindi va sempre a "MISS" invece di riusare la copia
+// vecchia). Eseguito una volta al giorno per tab (sessionStorage, non un
+// parametro fisso nell'URL: un link salvato nei preferiti con un vecchio
+// parametro anti-cache non deve restare bloccato per sempre sulla stessa
+// risposta cache). Avvolto in try/catch: se sessionStorage non e'
+// disponibile (es. modalita' privata con storage bloccato), semplicemente
+// non forza il refresh -- non deve mai impedire il caricamento della pagina.
+(function(){
+  try{
+    var KEY = "gs_cache_bust_day";
+    var today = new Date().toISOString().slice(0,10);
+    if(sessionStorage.getItem(KEY) !== today){
+      sessionStorage.setItem(KEY, today);
+      var sep = location.search ? "&" : "?";
+      location.replace(location.pathname + location.search + sep + "_cb=" + Date.now() + location.hash);
+    }
+  }catch(e){ /* storage bloccato: non blocchiamo il caricamento della pagina */ }
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GrantScout</title>
@@ -318,7 +343,7 @@
       if(days > 0) daysNote = " (tra " + days + " g.)";
       else if(days === 0) daysNote = " (oggi)";
     }
-    var tags = (call.tags || []).map(function(t){ return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join("");
+    var tags = (Array.isArray(call.tags) ? call.tags : []).map(function(t){ return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join("");
     var amountRow = call.amount ? '<span>Importo: <b>' + escapeHtml(call.amount) + '</b></span>' : "";
     // Le fonti fisse (pagine elenco) possono ora arrivare con "matches":
     // uno o piu' link specifici individuati su quella pagina, invece del
@@ -375,8 +400,25 @@
   }
 
   function renderColumn(el, list){
+    // list.filter(Boolean): scarta eventuali voci vuote/null -- non dovrebbe
+    // succedere (loadCalls le esclude gia'), ma sortCalls legge subito
+    // a.status/a.deadlineDate nel suo comparatore, PRIMA che il try/catch
+    // per-card qui sotto possa intervenire: una sola voce nulla lì basterebbe
+    // a far fallire l'ordinamento di TUTTA la lista. Difesa a costo zero.
+    list = (list || []).filter(Boolean);
     if(!list.length){ el.innerHTML = '<div class="empty">Nessun bando trovato al momento in questa categoria.</div>'; return; }
-    el.innerHTML = sortCalls(list).map(renderCard).join("");
+    // Ogni card ha il suo proprio try/catch: un singolo bando con un campo
+    // malformato (es. un bug futuro, o una modifica a mano su Firestore) non
+    // deve far sparire TUTTI gli altri -- prima bastava una card difettosa
+    // per far cadere l'intero .map() dentro la Promise di loadCalls, che
+    // veniva presa dal .catch() e sostituiva l'intera colonna con "Impossibile
+    // caricare i dati", bandi validi compresi.
+    var cards = [];
+    sortCalls(list).forEach(function(call){
+      try{ cards.push(renderCard(call)); }
+      catch(e){ console.error("Bando saltato per un errore nel rendering:", call, e); }
+    });
+    el.innerHTML = cards.length ? cards.join("") : '<div class="empty">Nessun bando trovato al momento in questa categoria.</div>';
   }
 
   var app, db, auth;
@@ -459,14 +501,36 @@
     }).catch(function(){ offlineBanner.classList.add("show"); });
   }
 
-  function renderHealthBanner(health){
+  function renderHealthBanner(data){
     var el = document.getElementById("healthBanner");
+    var health = data && data.health;
     var issues = (health && health.issues) || [];
-    if(!issues.length){ el.classList.remove("show"); el.innerHTML = ""; return; }
-    el.innerHTML = '<strong>Attenzione — problemi rilevati nell\'ultima scansione:</strong>' +
-      '<ul>' + issues.map(function(msg){ return '<li>' + escapeHtml(msg) + '</li>'; }).join("") + '</ul>' +
-      '<span>Non è un errore tuo: significa che una fonte esterna ha smesso di rispondere come previsto. ' +
-      'Se persiste, la fonte va controllata a mano.</span>';
+    var blocks = [];
+    // Distinto dai "problemi persistenti" sotto: uno scan.py che si e'
+    // interrotto per un errore imprevisto (vedi la protezione aggiunta in
+    // main(), scripts/scan.py) e' un evento diverso da una fonte esterna che
+    // non risponde da piu' scansioni -- prima non c'era ALCUN modo per
+    // l'utente di saperlo dall'app: si vedeva solo un "ultima scansione"
+    // vecchio, senza spiegazione.
+    if(data && data.lastRunCrashed){
+      blocks.push(
+        '<strong>L\'ultima esecuzione dello scraper si è interrotta per un errore imprevisto' +
+        (data.lastCrashAt ? ' (' + fmtDateTime(data.lastCrashAt) + ')' : '') + ':</strong> ' +
+        '<span>' + escapeHtml(data.lastCrashError || 'errore sconosciuto') + '</span> ' +
+        '<span>Le segnalazioni qui sotto sono quelle dell\'ultima esecuzione riuscita — potrebbero non essere aggiornatissime. ' +
+        'Se persiste dopo qualche ora, vale la pena controllare la scheda "Actions" del repository su GitHub.</span>'
+      );
+    }
+    if(issues.length){
+      blocks.push(
+        '<strong>Attenzione — problemi rilevati nell\'ultima scansione:</strong>' +
+        '<ul>' + issues.map(function(msg){ return '<li>' + escapeHtml(msg) + '</li>'; }).join("") + '</ul>' +
+        '<span>Non è un errore tuo: significa che una fonte esterna ha smesso di rispondere come previsto. ' +
+        'Se persiste, la fonte va controllata a mano.</span>'
+      );
+    }
+    if(!blocks.length){ el.classList.remove("show"); el.innerHTML = ""; return; }
+    el.innerHTML = blocks.join('<hr style="border:none;border-top:1px solid currentColor;opacity:0.25;margin:10px 0;">');
     el.classList.add("show");
   }
 
@@ -482,7 +546,7 @@
       var data = snap.exists ? snap.data() : {};
       document.getElementById("lastRun").textContent = data.lastRun ? fmtDateTime(data.lastRun) : "non ancora eseguita";
       renderScanDetail(data.sourcesChecked);
-      renderHealthBanner(data.health);
+      renderHealthBanner(data);
     }).catch(function(){ offlineBanner.classList.add("show"); });
   }
 

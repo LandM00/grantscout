@@ -9,9 +9,28 @@ on:
     # Permette anche di lanciare la scansione a mano dalla scheda "Actions"
     # del repository su GitHub, senza aspettare il prossimo giro.
 
+# Se una scansione e' ancora in corso (es. quella schedulata ogni 6 ore)
+# quando viene lanciata anche una scansione a mano, la seconda ora ASPETTA
+# che la prima finisca invece di girare in parallelo -- due esecuzioni
+# contemporanee scriverebbero entrambe su Firestore (stessa collection
+# "calls", stesso meta/status) potendosi sovrascrivere a vicenda in modo
+# imprevedibile. cancel-in-progress:false vuol dire "accoda, non annullare
+# quella in corso".
+concurrency:
+  group: grantscout-scan
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # Rete di sicurezza: ogni chiamata HTTP nello script ha gia' un timeout
+    # esplicito (vedi HTTP_TIMEOUT/JINA_TIMEOUT in scripts/scan.py), quindi
+    # non dovrebbe mai bloccarsi per davvero -- ma senza questo limite un
+    # blocco imprevisto (bug in una libreria, o comportamento anomalo di un
+    # sito) potrebbe far girare il job per il timeout di default di GitHub
+    # Actions (360 minuti), consumando inutilmente i minuti gratuiti del
+    # piano e ritardando di ore la scoperta del problema.
+    timeout-minutes: 15
     steps:
       - name: Checkout del repository
         uses: actions/checkout@v4
