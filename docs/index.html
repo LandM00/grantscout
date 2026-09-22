@@ -263,7 +263,7 @@
       <div class="field" style="margin-top:18px;">
         <label for="sourceInput">Aggiungi fonte/i da monitorare</label>
         <textarea id="sourceInput" spellcheck="false" placeholder="https://esempio.it/bandi | Nome ente | bandi | Titolo breve (opzionale)"></textarea>
-        <p class="field-help">Una fonte per riga, campi separati da "|": indirizzo della pagina, nome dell'ente/finanziatore, categoria ("bandi" oppure "reti"), e un titolo breve facoltativo. Lo scraper controllerà quella pagina e segnalerà quando cambia o contiene le tue parole chiave — puoi incollarne più di una insieme.</p>
+        <p class="field-help">Una fonte per riga, campi separati da "|": indirizzo della pagina, nome dell'ente/finanziatore (obbligatorio: senza un nome le segnalazioni di quella fonte comparirebbero come "Senza titolo"), categoria ("bandi" oppure "reti"), e un titolo breve facoltativo. Lo scraper controllerà quella pagina e segnalerà quando cambia o contiene le tue parole chiave — puoi incollarne più di una insieme.</p>
         <div class="settings-actions">
           <button class="save" id="addSourceBtn" type="button">Aggiungi fonte/i</button>
           <span class="save-msg" id="sourceMsg"></span>
@@ -630,21 +630,39 @@
       if(!requireUnlock(sourceMsg)) return;
       var lines = sourceInput.value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
       if(!lines.length){ sourceMsg.textContent = "Scrivi almeno una fonte prima di aggiungere."; return; }
-      var entries = lines.map(function(line){
+      // Il nome dell'ente era facoltativo: una fonte aggiunta senza (es. solo
+      // l'indirizzo) finiva per sempre senza nessuna etichetta leggibile --
+      // le sue segnalazioni comparivano come "Senza titolo" nell'app (caso
+      // reale trovato: la fonte "Obiettivo Europa"). Ora e' obbligatorio: le
+      // righe senza nome vengono scartate con un avviso chiaro, invece di
+      // essere salvate silenziosamente in questo stato.
+      var noNameCount = 0;
+      var entries = [];
+      lines.forEach(function(line){
         var parts = line.split("|").map(function(p){ return p.trim(); });
-        return {
-          url: parts[0] || "",
-          funder: parts[1] || "",
+        var url = parts[0] || "";
+        var funder = parts[1] || "";
+        if(!url) return;
+        if(!funder){ noNameCount++; return; }
+        entries.push({
+          url: url,
+          funder: funder,
           category: parseCategory(parts[2]),
           title: parts[3] || "",
           addedAt: new Date().toISOString()
-        };
-      }).filter(function(e){ return e.url; });
-      if(!entries.length){ sourceMsg.textContent = "Nessun indirizzo valido trovato: controlla il formato (vedi il testo di aiuto)."; return; }
+        });
+      });
+      if(!entries.length){
+        sourceMsg.textContent = noNameCount
+          ? "Nessuna fonte aggiunta: manca il nome dell'ente (2° campo dopo \"|\") per " + noNameCount + " riga/righe."
+          : "Nessun indirizzo valido trovato: controlla il formato (vedi il testo di aiuto).";
+        return;
+      }
       addSourceBtn.disabled = true; sourceMsg.textContent = "Aggiunta in corso…";
       Promise.all(entries.map(function(e){ return db.collection("sources").add(e); }))
         .then(function(){
-          sourceMsg.textContent = "Aggiunte " + entries.length + " fonte/i.";
+          sourceMsg.textContent = "Aggiunte " + entries.length + " fonte/i." +
+            (noNameCount ? " (" + noNameCount + " riga/righe saltate per nome ente mancante.)" : "");
           sourceInput.value = "";
           addSourceBtn.disabled = false;
           loadSources();
