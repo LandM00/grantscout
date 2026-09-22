@@ -966,6 +966,14 @@ _NAV_LINK_TEXT_BLOCKLIST = {
 # presente in coda alla card, vedi check_watch_pages).
 MAX_WATCH_MATCH_ITEMS = 8
 
+# Soglia (in caratteri) sopra la quale il testo di un link viene
+# considerato di per se' sufficiente come contesto per il confronto con
+# le parole chiave, senza risalire al genitore (vedi commento piu' sotto
+# dove viene usata). 40 caratteri bastano a escludere i link generici
+# tipo "Scopri di piu'"/"Leggi tutto" (di solito sotto i 20 caratteri) ma
+# non un titolo di bando vero (quasi sempre sopra i 40).
+_MIN_LINK_TEXT_FOR_OWN_CONTEXT = 40
+
 
 def extract_matching_links(html, base_url, keywords):
     """Cerca, tra tutti i link <a> della pagina, quelli che sembrano
@@ -1007,8 +1015,26 @@ def extract_matching_links(html, base_url, keywords):
         absolute_url = urljoin(base_url, href)
         if absolute_url in seen_urls:
             continue
-        parent = a.find_parent(["li", "tr", "div", "p", "article"])
-        context_text = parent.get_text(" ", strip=True) if parent is not None else text
+        # Verificato con un test dal vivo su un aggregatore di bandi reale:
+        # quando l'intera card di un bando e' un unico link cliccabile (molto
+        # comune), il suo genitore immediato e' spesso il contenitore di TUTTA
+        # la lista, non solo di questa card -- risalire sempre al genitore
+        # faceva "contaminare" il contesto di un bando con i titoli dei bandi
+        # vicini nella stessa lista (una parola chiave presente in un solo
+        # titolo veniva trovata anche su bandi completamente estranei). Se il
+        # link ha gia' un testo proprio sufficientemente ricco, lo usiamo da
+        # solo; risaliamo al genitore solo per i link brevi/generici (es.
+        # "Scopri di piu'") e comunque solo se quel genitore contiene SOLO
+        # questo link -- altrimenti e' lo stesso problema, con una soglia
+        # diversa.
+        if len(text) >= _MIN_LINK_TEXT_FOR_OWN_CONTEXT:
+            context_text = text
+        else:
+            parent = a.find_parent(["li", "tr", "div", "p", "article"])
+            if parent is not None and len(parent.find_all("a", href=True)) == 1:
+                context_text = parent.get_text(" ", strip=True)
+            else:
+                context_text = text
         context_tokens = _tokenize(context_text.lower())
         if not any(kw and keyword_matches_text(kw, context_tokens) for kw in keywords):
             continue
