@@ -9,10 +9,11 @@ Completamente separata da Claude: gira su servizi gratuiti —
 - **GitHub Pages** ospita l'app (cartella `docs/`).
 - **GitHub Actions** esegue ogni 6 ore (gratis) uno scraper Python che
   cerca bandi/opportunità in base a parole chiave e aggiorna i dati.
-- **Firebase Firestore** (piano gratuito) fa da database condiviso: ci
-  scrive lo scraper, e da lì l'app legge e mostra i risultati. È anche
-  dove l'app salva le impostazioni (parole chiave, frequenza) quando le
-  modifichi dal telefono.
+- **Firebase Firestore** (piano gratuito) fa da database: ci scrive lo
+  scraper, e da lì l'app legge e mostra i risultati. Ogni persona ha un
+  proprio account (parole chiave, frequenza e bandi trovati restano
+  privati); l'elenco delle fonti monitorate resta invece condiviso tra
+  tutti gli account.
 
 Nessun costo, nessuna chiave API di modelli linguistici: la ricerca è per
 parola chiave e rilevamento di cambiamenti di pagina, non un giudizio
@@ -34,8 +35,10 @@ docs/                  L'app web (HTML/CSS/JS), pubblicata via GitHub Pages
   service-worker.js    Cache minima per l'installazione
 scripts/
   scan.py              Lo scraper che gira su GitHub Actions
+  migrate_to_user.py   Migrazione una tantum dei vecchi dati condivisi verso un account
   requirements.txt     Dipendenze Python dello scraper
 .github/workflows/
   scan.yml             Pianificazione dello scraper (ogni 6 ore + avvio manuale)
+  migrate.yml          Avvio manuale della migrazione verso un account (una tantum)
 firestore.rules         Regole di sicurezza del database (chi può leggere/scrivere cosa)
 ```

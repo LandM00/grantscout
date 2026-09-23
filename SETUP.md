@@ -23,11 +23,12 @@ Google (per Firebase) e un account GitHub (dici di averlo già).
    tutto il contenuto e incollalo al posto di quello presente.
 3. Clicca **Pubblica**.
 
-Queste regole dicono: chiunque abbia il link può leggere tutto; per
-modificare le impostazioni (parole chiave, fonti, o svuotare i bandi
-trovati) serve il codice di accesso spiegato al punto 13, quindi l'app
-resta consultabile da chiunque ma solo chi conosce il codice può cambiare
-qualcosa. Nessuno tranne lo scraper può scrivere i risultati dei bandi.
+Queste regole dicono: ogni persona ha il proprio account (vedi punto 13)
+e vede/gestisce SOLO le proprie parole chiave e i propri bandi trovati —
+nessuna lettura è possibile senza avere effettuato l'accesso. L'elenco
+delle fonti monitorate (le pagine da controllare) resta invece condiviso:
+chiunque abbia un account può leggerlo e modificarlo, è un catalogo
+comune. Nessuno tranne lo scraper può scrivere i risultati dei bandi.
 
 ## 4. Registra un'app web e prendi la configurazione
 
@@ -100,53 +101,44 @@ pubblico dell'app.
 ## 12. Manda il link a tuo fratello
 
 Gli basta il link di GitHub Pages: lo apre, lo installa sul telefono con
-gli stessi passaggi del punto 11, e da lì può modificare parole chiave e
-frequenza e guardare i bandi trovati — nessun account richiesto per usarla.
+gli stessi passaggi del punto 11, e crea il proprio account con
+"Registrati" (vedi punto 13) — da quel momento vede e gestisce solo le
+proprie parole chiave e i propri bandi trovati, mai i tuoi. L'elenco
+delle fonti monitorate resta invece condiviso tra tutti gli account.
 
-## 13. Proteggi le modifiche con un codice di accesso
+## 13. Crea il tuo account (e, se serve, porta i vecchi dati)
 
-Le regole di Firestore (`firestore.rules`) ora permettono a chiunque abbia
-il link di leggere i bandi, ma per modificare qualcosa (parole chiave,
-fonti monitorate, o il pulsante "Ricomincia da zero") serve un codice a 6
-cifre che scegli tu. Chi ha solo il link può guardare i bandi ma non
-toccare nulla; chi conosce anche il codice può modificare — senza dover
-creare un account, inserire un'email o ricordare una password vera.
-
-Tecnicamente il codice sblocca un accesso Firebase dedicato (Firebase
-Authentication, email/password), ma questo resta invisibile a chi usa
-l'app: vede solo un campo "Codice a 6 cifre" e un pulsante "Sblocca".
+Da questa versione l'app richiede un vero account personale (email +
+password) invece del vecchio codice condiviso: ogni persona crea il
+proprio, e da quel momento vede/gestisce solo i propri dati.
 
 1. Su Firebase Console, nel menu a sinistra vai su **Build →
    Authentication** (se è la prima volta, clicca "Inizia").
 2. Scheda **Sign-in method** → clicca **Email/Password** → attivalo
-   (basta il primo interruttore) → Salva.
-3. Scheda **Users** → **Aggiungi utente**.
-4. Come email metti un indirizzo qualsiasi non tuo, ad esempio
-   `accesso@grantscout-app.invalid` (non deve esistere davvero: serve solo
-   come "nome utente" interno, non userà una vera casella email).
-5. Come password scegli le **6 cifre** che vuoi usare come codice di
-   accesso (es. `482913`) — Firebase richiede almeno 6 caratteri, quindi
-   niente codici più corti.
-6. Se hai usato un'email diversa da quella dell'esempio al passo 4, apri
-   `docs/index.html`, cerca la riga `var LOGIN_EMAIL = ...` e sostituisci
-   l'indirizzo con quello che hai usato (il codice invece non va scritto
-   da nessuna parte nel codice: lo digiti tu, o chi condividi l'app, ogni
-   volta che serve).
-7. Torna alla scheda **Regole** di Firestore Database e incolla di nuovo
-   il contenuto di `firestore.rules` di questo progetto (è cambiato:
-   adesso richiede il codice per scrivere) → **Pubblica**.
-8. Apri il sito, vai su "Impostazioni ricerca", inserisci il codice nel
-   campo "Codice di accesso per modificare" e premi **Sblocca**: se tutto
-   è a posto, il messaggio diventa "Sbloccato: puoi modificare" e puoi
-   salvare le impostazioni normalmente.
-9. Condividi il codice con chi vuoi che possa modificare (a voce, o in un
-   messaggio privato) — non va mai scritto sul sito stesso o in un posto
-   pubblico.
+   (basta il primo interruttore) → Salva. È l'unico passo da fare qui su
+   Firebase Console: l'account vero e proprio si crea direttamente
+   nell'app, al passo successivo.
+3. Apri il sito e, nel modulo in alto, usa la scheda **Registrati**:
+   inserisci una tua email vera e una password di almeno 6 caratteri, poi
+   premi **Crea account**.
+4. Se avevi già parole chiave o bandi trovati dalla versione precedente
+   (quella con il codice condiviso), portali nel tuo nuovo account con il
+   workflow dedicato, da lanciare UNA SOLA VOLTA:
+   1. Su Firebase Console → Authentication → scheda **Users**, trova la
+      riga del tuo account appena creato e copia il valore nella colonna
+      **User UID**.
+   2. Sul repository GitHub: scheda **Actions** → workflow "Migra i dati
+      verso il tuo account" → **Run workflow** → incolla l'uid copiato →
+      Run workflow.
+   3. Dopo qualche secondo le vecchie impostazioni/bandi condivisi sono
+      spariti dalla cima del database e sono comparsi dentro il tuo
+      account (le fonti monitorate non c'entrano: restano dove sono,
+      condivise).
 
-Il codice resta valido finché non lo cambi tu (rifacendo i passi 3-5 con
-una password diversa, oppure eliminando e ricreando l'utente). Ogni
-browser resta sbloccato finché non premi "Blocca" o cancelli i dati del
-sito, poi richiederà di nuovo il codice.
+Ogni account resta valido finché non lo elimini da Firebase Console →
+Authentication → Users. Ogni browser resta collegato finché non premi
+"Esci" o cancelli i dati del sito, poi richiederà di nuovo email e
+password.
 
 ## 14. Avvia scansione dall'app (senza andare su GitHub)
 
@@ -194,9 +186,9 @@ gratuito ("Cloudflare Worker") che fa da intermediario.
    - `sharedSecret`: la stessa password messa in `SCAN_SHARED_SECRET`
      al punto 4.
 7. Salva, fai commit e push.
-8. Su "Impostazioni ricerca", sblocca con il codice di accesso e premi
-   "Avvia scansione ora": dopo qualche secondo dovresti vedere il
-   messaggio di conferma, e dopo 1-3 minuti i nuovi risultati.
+8. Dopo aver effettuato l'accesso con il tuo account, premi "Avvia
+   scansione ora": dopo qualche secondo dovresti vedere il messaggio di
+   conferma, e dopo 1-3 minuti i nuovi risultati.
 
 **Sulla sicurezza**: con questo schema il token GitHub vero non tocca
 mai il repository né il codice del sito — resta solo dentro le
@@ -224,11 +216,11 @@ Actions di GitHub, come prima.
 - **Le voci "Da verificare"** sono segnalazioni automatiche generate
   quando una fonte monitorata contiene una parola chiave cercata — non un
   riassunto intelligente. Vanno sempre controllate sulla fonte ufficiale
-  prima di fidarsene. L'elenco delle fonti monitorate parte vuoto: le
-  aggiungi tu dal pannello "Impostazioni ricerca" → "Fonti monitorate",
-  e quando cambi completamente argomento di ricerca puoi usare il
-  pulsante "Cambia argomento" per svuotare bandi e fonti insieme in un
-  colpo solo.
+  prima di fidarsene. L'elenco delle fonti monitorate è condiviso tra
+  tutti gli account: lo gestisci dal pannello "Impostazioni ricerca" →
+  "Fonti monitorate", aggiungendo o togliendo una fonte alla volta (non
+  esiste più un pulsante che svuota tutto insieme, perché toccherebbe
+  anche le fonti usate dagli altri account).
 - **L'integrazione Horizon Europe** usa un endpoint pubblico del portale
   Funding & Tenders che non è ufficialmente documentato dalla Commissione
   Europea: funziona nella maggior parte dei casi, ma se smette di
