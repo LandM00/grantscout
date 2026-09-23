@@ -614,7 +614,13 @@
       if(!btn || !db) return;
       if(!requireUnlock(null)){ window.alert("Devi prima inserire il codice di accesso in \"Impostazioni ricerca\" per rimuovere una fonte."); return; }
       var id = btn.getAttribute("data-id");
-      var ok = window.confirm("Rimuovere questa fonte dal monitoraggio? Non tocca i bandi già trovati.");
+      // "entro 6 ore, o subito se lanci la scansione a mano" -- stesso testo
+      // usato per "Ricomincia da zero"/"Cambia argomento": la rimozione qui
+      // e' sul client (permessa dalle regole), ma la segnalazione che questa
+      // fonte aveva eventualmente prodotto vive nella collection "calls",
+      // che il client non può toccare (solo lo script con la Admin SDK può
+      // scriverci) — verra' rimossa alla prossima scansione.
+      var ok = window.confirm("Rimuovere questa fonte dal monitoraggio? L'eventuale bando/segnalazione già trovato da questa fonte verrà rimosso alla prossima scansione (entro 6 ore, o subito se lanci la scansione a mano da GitHub Actions).");
       if(!ok) return;
       btn.disabled = true;
       db.collection("sources").doc(id).delete().then(loadSources).catch(function(){

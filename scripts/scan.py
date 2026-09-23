@@ -1204,6 +1204,38 @@ def check_watch_pages(keywords, previous_hashes, sources):
     return results, new_hashes, page_status
 
 
+def prune_stale_watch_calls(db, current_source_ids):
+    """Le segnalazioni delle fonti fisse (source == "page-watcher") hanno id
+    "watch-<id della fonte>". A differenza dei bandi Horizon Europe (vedi
+    prune_stale_horizon_calls sotto), qui NON le riallineiamo ad ogni
+    scansione: sono pensate per tracciare uno stato nel tempo, quindi una
+    fonte che questo giro non trova piu' un match non deve perdere la sua
+    segnalazione precedente (potrebbe essere solo una pagina temporaneamente
+    diversa, non un motivo per dimenticare quanto trovato prima).
+
+    Rimuoviamo SOLO le segnalazioni la cui fonte e' stata esplicitamente
+    rimossa dall'utente (pulsante "Rimuovi" in "Fonti monitorate"): quelle
+    sono inequivocabilmente orfane -- prima restavano per sempre in lista
+    anche dopo aver rimosso la fonte che le aveva prodotte, visibili solo
+    svuotando TUTTI i bandi con un reset completo. Il client web non puo'
+    farlo da solo (firestore.rules nega la scrittura su "calls" a chiunque
+    non sia lo script con la Admin SDK), quindi la pulizia avviene qui, alla
+    prossima scansione dopo la rimozione."""
+    docs = db.collection("calls").where("source", "==", "page-watcher").stream()
+    batch = db.batch()
+    removed = 0
+    for doc in docs:
+        source_id = doc.id[len("watch-"):] if doc.id.startswith("watch-") else doc.id
+        if source_id not in current_source_ids:
+            batch.delete(doc.reference)
+            removed += 1
+            if removed % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+    batch.commit()
+    return removed
+
+
 def prune_stale_horizon_calls(db, current_ids):
     """I bandi trovati su Horizon Europe (source == "funding-tenders-api")
     sono il riflesso di una ricerca dal vivo, fatta da zero ad ogni
@@ -1463,6 +1495,13 @@ def _run_scan(db):
         print("Pulizia bandi Horizon obsoleti saltata: {}/{} parole chiave fallite in questa scansione.".format(
             horizon_stats["termsFailed"], horizon_stats["termsTotal"]))
 
+    # Segnalazioni delle fonti fisse orfane (fonte rimossa dall'app): vedi il
+    # commento di prune_stale_watch_calls per il perche' e' scoperto solo qui
+    # (non nel client web) e solo per le fonti rimosse (non per quelle che
+    # semplicemente non trovano piu' un match questo giro).
+    current_source_ids = {page["id"] for page in sources}
+    pruned_watch = prune_stale_watch_calls(db, current_source_ids)
+
     closed_count = close_expired_calls(db)
 
     db.collection("meta").document("status").set({
@@ -1471,12 +1510,12 @@ def _run_scan(db):
         "sourcesChecked": sources_checked,
         "pageHashes": new_hashes,
         "health": health,
-        "notes": "{} voci scritte/aggiornate, {} bandi Horizon obsoleti rimossi, {} bandi contrassegnati come scaduti.".format(
-            written, pruned, closed_count),
+        "notes": "{} voci scritte/aggiornate, {} bandi Horizon obsoleti rimossi, {} segnalazioni orfane rimosse (fonte rimossa), {} bandi contrassegnati come scaduti.".format(
+            written, pruned, pruned_watch, closed_count),
     }, merge=True)
 
-    print("Fatto: {} voci aggiornate, {} bandi Horizon obsoleti rimossi, {} bandi chiusi automaticamente.".format(
-        written, pruned, closed_count))
+    print("Fatto: {} voci aggiornate, {} bandi Horizon obsoleti rimossi, {} segnalazioni orfane rimosse, {} bandi chiusi automaticamente.".format(
+        written, pruned, pruned_watch, closed_count))
 
 
 if __name__ == "__main__":
