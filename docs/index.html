@@ -200,6 +200,25 @@
   .empty, .loading{
     font-size:13.5px; color:var(--ink-muted); padding:18px; border:1px dashed var(--line); border-radius:10px; background:var(--surface);
   }
+  .field input[type="email"], .field input[type="password"]{
+    width:100%; font-family:"IBM Plex Sans", sans-serif; font-size:14.5px; color:var(--ink);
+    background:var(--surface-alt); border:1px solid var(--line); border-radius:7px; padding:9px 11px; margin-bottom:12px;
+  }
+  .auth-box{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px 18px 18px;
+    box-shadow:var(--shadow); margin-bottom:24px; max-width:420px;
+  }
+  .auth-tabs{ display:flex; gap:6px; margin-bottom:14px; }
+  .auth-tab{
+    flex:1; font-family:"IBM Plex Sans", sans-serif; font-weight:600; font-size:13px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:7px; background:var(--surface-alt); color:var(--ink-muted); cursor:pointer;
+  }
+  .auth-tab.active{ background:var(--accent2); color:#fff; border-color:var(--accent2); }
+  .user-bar{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    font-size:13px; color:var(--ink-muted); margin-bottom:20px; padding-bottom:14px; border-bottom:1px solid var(--line);
+  }
+  .user-bar strong{color:var(--ink); font-weight:500;}
   footer{ margin-top:44px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--ink-muted); line-height:1.6; }
 </style>
 </head>
@@ -208,6 +227,29 @@
   <p class="eyebrow">Monitor bandi &amp; reti di ricerca</p>
   <h1>GrantScout</h1>
   <p class="lede">Bandi di finanziamento e collaborazioni di rete raccolti automaticamente in base alle parole chiave che imposti qui sotto.</p>
+
+  <div class="field auth-box" id="authBox">
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tabSignin">Accedi</button>
+      <button type="button" class="auth-tab" id="tabSignup">Registrati</button>
+    </div>
+    <label for="authEmail">Email</label>
+    <input type="email" id="authEmail" placeholder="tuo@indirizzo.it" autocomplete="username">
+    <label for="authPassword">Password</label>
+    <input type="password" id="authPassword" placeholder="Almeno 6 caratteri" autocomplete="current-password">
+    <div class="settings-actions">
+      <button class="save" id="authSubmitBtn" type="button">Accedi</button>
+      <span class="save-msg" id="authMsg"></span>
+    </div>
+    <p class="field-help">Ogni persona ha il proprio account: le tue parole chiave e i bandi che trovi sono visibili solo a te. Le fonti monitorate sono condivise tra tutti gli utenti dell'app.</p>
+  </div>
+
+  <div class="user-bar" id="userBar" style="display:none;">
+    <span>Accesso come <strong id="userEmailLabel"></strong></span>
+    <button class="reset" id="signOutBtn" type="button">Esci</button>
+  </div>
+
+  <div id="appContent" style="display:none;">
   <div class="scan-line">
     <span>Ultima scansione: <strong id="lastRun">—</strong></span>
     <span>Frequenza: <strong id="freqLabel">—</strong></span>
@@ -221,16 +263,6 @@
   <details class="settings" id="settingsPanel">
     <summary>Impostazioni ricerca <span class="summary-arrow">▸</span></summary>
     <div class="settings-body">
-      <div class="field" id="unlockBox">
-        <label for="pinInput">Codice di accesso per modificare</label>
-        <div class="settings-actions">
-          <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="pinInput" placeholder="Codice a 6 cifre" style="max-width:160px;">
-          <button class="save" id="unlockBtn" type="button">Sblocca</button>
-          <button class="reset" id="lockBtn" type="button" style="display:none;">Blocca</button>
-          <span class="save-msg" id="unlockMsg"></span>
-        </div>
-        <p class="field-help">Serve solo per modificare parole chiave, fonti o svuotare i bandi trovati: la consultazione dei bandi resta sempre libera per chiunque abbia il link.</p>
-      </div>
       <div class="field">
         <label for="kwInput">Parole chiave (separate da virgola)</label>
         <textarea id="kwInput" spellcheck="false" placeholder="migrazione, lavoro agricolo, migrant labour agriculture"></textarea>
@@ -253,12 +285,6 @@
         <span class="save-msg" id="resetMsg"></span>
       </div>
       <p class="field-help">Svuota tutti i bandi trovati finora. Non tocca parole chiave, frequenza o fonti monitorate.</p>
-
-      <div class="settings-actions" style="margin-top:8px;">
-        <button class="reset" id="resetTopicBtn" type="button">Cambia argomento</button>
-        <span class="save-msg" id="resetTopicMsg"></span>
-      </div>
-      <p class="field-help">Svuota bandi e fonti monitorate insieme: usalo quando cambi completamente argomento di ricerca, così non ritrovi segnalazioni sul vecchio argomento. Parole chiave e frequenza restano invariate — ricordati di aggiornarle qui sopra.</p>
 
       <div class="field" style="margin-top:18px;">
         <label for="sourceInput">Aggiungi fonte/i da monitorare</label>
@@ -293,6 +319,7 @@
       <p class="col-sub">Azioni COST, reti accademiche, meccanismi di partenariato</p>
       <div class="stack" id="networkStack"><div class="loading">Caricamento…</div></div>
     </div>
+  </div>
   </div>
 </div>
 
@@ -418,10 +445,7 @@
   }
 
   var app, db, auth;
-  // Email fissa usata solo internamente per il login con codice numerico
-  // (vedi SETUP.md, sezione "Proteggi le modifiche con un codice di
-  // accesso"): non e una casella email vera, nessuno la vede o la usa.
-  var LOGIN_EMAIL = "accesso@grantscout-app.invalid";
+  var currentUser = null;
   try{
     app = firebase.initializeApp(window.FIREBASE_CONFIG);
     db = firebase.firestore();
@@ -439,56 +463,97 @@
   var scanMsg = document.getElementById("scanMsg");
   var offlineBanner = document.getElementById("offlineBanner");
 
-  var pinInput = document.getElementById("pinInput");
-  var unlockBtn = document.getElementById("unlockBtn");
-  var lockBtn = document.getElementById("lockBtn");
-  var unlockMsg = document.getElementById("unlockMsg");
+  var authBox = document.getElementById("authBox");
+  var userBar = document.getElementById("userBar");
+  var userEmailLabel = document.getElementById("userEmailLabel");
+  var signOutBtn = document.getElementById("signOutBtn");
+  var appContent = document.getElementById("appContent");
+  var tabSignin = document.getElementById("tabSignin");
+  var tabSignup = document.getElementById("tabSignup");
+  var authEmail = document.getElementById("authEmail");
+  var authPassword = document.getElementById("authPassword");
+  var authSubmitBtn = document.getElementById("authSubmitBtn");
+  var authMsg = document.getElementById("authMsg");
+  var authMode = "signin";
 
-  function isUnlocked(){ return !!(auth && auth.currentUser); }
+  function userRef(){ return (db && currentUser) ? db.collection("users").doc(currentUser.uid) : null; }
 
-  function requireUnlock(msgEl){
-    if(isUnlocked()) return true;
-    if(msgEl) msgEl.textContent = "Devi prima inserire il codice di accesso qui sopra.";
-    var box = document.getElementById("unlockBox");
-    if(box && box.scrollIntoView) box.scrollIntoView({behavior:"smooth", block:"center"});
-    return false;
+  function setAuthMode(mode){
+    authMode = mode;
+    if(tabSignin) tabSignin.classList.toggle("active", mode === "signin");
+    if(tabSignup) tabSignup.classList.toggle("active", mode === "signup");
+    if(authSubmitBtn) authSubmitBtn.textContent = mode === "signin" ? "Accedi" : "Crea account";
+    if(authPassword) authPassword.setAttribute("autocomplete", mode === "signin" ? "current-password" : "new-password");
+    if(authMsg) authMsg.textContent = "";
+  }
+  if(tabSignin) tabSignin.addEventListener("click", function(){ setAuthMode("signin"); });
+  if(tabSignup) tabSignup.addEventListener("click", function(){ setAuthMode("signup"); });
+
+  function translateAuthError(err){
+    var code = (err && err.code) || "";
+    if(code === "auth/email-already-in-use") return "Esiste già un account con questa email: usa \"Accedi\".";
+    if(code === "auth/invalid-email") return "Email non valida.";
+    if(code === "auth/weak-password") return "Password troppo debole (minimo 6 caratteri).";
+    if(code === "auth/wrong-password" || code === "auth/invalid-credential" || code === "auth/invalid-login-credentials") return "Email o password errati.";
+    if(code === "auth/user-not-found") return "Nessun account con questa email: usa \"Registrati\".";
+    if(code === "auth/too-many-requests") return "Troppi tentativi, riprova più tardi.";
+    return "Errore: " + ((err && err.message) || "riprova.");
   }
 
-  if(auth){
-    auth.onAuthStateChanged(function(user){
-      if(pinInput) pinInput.style.display = user ? "none" : "";
-      if(unlockBtn) unlockBtn.style.display = user ? "none" : "";
-      if(lockBtn) lockBtn.style.display = user ? "" : "none";
-      if(unlockMsg) unlockMsg.textContent = user ? "Sbloccato: puoi modificare." : "";
-    });
-  }
-
-  if(unlockBtn){
-    unlockBtn.addEventListener("click", function(){
+  if(authSubmitBtn){
+    authSubmitBtn.addEventListener("click", function(){
       if(!auth) return;
-      var pin = (pinInput.value || "").trim();
-      if(pin.length < 6){ unlockMsg.textContent = "Il codice deve avere 6 cifre."; return; }
-      unlockBtn.disabled = true; unlockMsg.textContent = "Verifica in corso…";
-      auth.signInWithEmailAndPassword(LOGIN_EMAIL, pin).then(function(){
-        pinInput.value = "";
-        unlockBtn.disabled = false;
+      var email = (authEmail.value || "").trim();
+      var password = authPassword.value || "";
+      if(!email || password.length < 6){
+        authMsg.textContent = "Inserisci un'email valida e una password di almeno 6 caratteri.";
+        return;
+      }
+      authSubmitBtn.disabled = true; authMsg.textContent = "Un momento…";
+      var action = authMode === "signin"
+        ? auth.signInWithEmailAndPassword(email, password)
+        : auth.createUserWithEmailAndPassword(email, password);
+      action.then(function(){
+        authPassword.value = "";
+        authSubmitBtn.disabled = false;
       }).catch(function(err){
-        console.error("Errore sblocco:", err);
-        unlockMsg.textContent = "Codice errato, riprova.";
-        unlockBtn.disabled = false;
+        authSubmitBtn.disabled = false;
+        authMsg.textContent = translateAuthError(err);
       });
     });
   }
 
-  if(lockBtn){
-    lockBtn.addEventListener("click", function(){
+  if(signOutBtn){
+    signOutBtn.addEventListener("click", function(){
       if(auth) auth.signOut();
     });
   }
 
+  if(auth){
+    auth.onAuthStateChanged(function(user){
+      currentUser = user;
+      if(user){
+        if(authBox) authBox.style.display = "none";
+        if(userBar) userBar.style.display = "";
+        if(userEmailLabel) userEmailLabel.textContent = user.email || "";
+        if(appContent) appContent.style.display = "";
+        if(db){
+          db.collection("users").doc(user.uid).set({
+            email: user.email || "", lastSeenAt: new Date().toISOString()
+          }, {merge:true}).catch(function(){});
+        }
+        loadAll();
+      }else{
+        if(authBox) authBox.style.display = "";
+        if(userBar) userBar.style.display = "none";
+        if(appContent) appContent.style.display = "none";
+      }
+    });
+  }
+
   function loadConfig(){
-    if(!db) return;
-    db.collection("config").doc("main").get().then(function(snap){
+    if(!db || !userRef()) return;
+    userRef().collection("config").doc("main").get().then(function(snap){
       var data = snap.exists ? snap.data() : {};
       kwInput.value = (data.keywords || []).join(", ");
       var freq = data.frequency || "biweekly";
@@ -537,8 +602,8 @@
   }
 
   function loadMeta(){
-    if(!db) return;
-    db.collection("meta").doc("status").get().then(function(snap){
+    if(!db || !userRef()) return;
+    userRef().collection("meta").doc("status").get().then(function(snap){
       var data = snap.exists ? snap.data() : {};
       document.getElementById("lastRun").textContent = data.lastRun ? fmtDateTime(data.lastRun) : "non ancora eseguita";
       renderScanDetail(data.sourcesChecked);
@@ -547,8 +612,8 @@
   }
 
   function loadCalls(){
-    if(!db) return;
-    db.collection("calls").get().then(function(qs){
+    if(!db || !userRef()) return;
+    userRef().collection("calls").get().then(function(qs){
       var funding = [], network = [];
       document.getElementById("callCount").textContent = qs.size;
       qs.forEach(function(doc){
@@ -608,7 +673,7 @@
     sourcesList.addEventListener("click", function(ev){
       var btn = ev.target.closest ? ev.target.closest(".source-remove") : null;
       if(!btn || !db) return;
-      if(!requireUnlock(null)){ window.alert("Devi prima inserire il codice di accesso in \"Impostazioni ricerca\" per rimuovere una fonte."); return; }
+      if(!currentUser){ window.alert("Devi prima accedere per rimuovere una fonte."); return; }
       var id = btn.getAttribute("data-id");
       // "entro 6 ore, o subito se lanci la scansione a mano" -- stesso testo
       // usato per "Ricomincia da zero"/"Cambia argomento": la rimozione qui
@@ -629,7 +694,7 @@
   if(addSourceBtn){
     addSourceBtn.addEventListener("click", function(){
       if(!db) return;
-      if(!requireUnlock(sourceMsg)) return;
+      if(!currentUser){ sourceMsg.textContent = "Devi prima accedere per aggiungere una fonte."; return; }
       var lines = sourceInput.value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
       if(!lines.length){ sourceMsg.textContent = "Scrivi almeno una fonte prima di aggiungere."; return; }
       // Il nome dell'ente era facoltativo: una fonte aggiunta senza (es. solo
@@ -677,16 +742,14 @@
   }
 
   function loadAll(){ loadConfig(); loadMeta(); loadCalls(); loadSources(); }
-  loadAll();
 
   if(saveBtn){
     saveBtn.addEventListener("click", function(){
-      if(!db) return;
-      if(!requireUnlock(saveMsg)) return;
+      if(!db || !userRef()) return;
       var keywords = kwInput.value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
       var frequency = freqInput.value;
       saveBtn.disabled = true; saveMsg.textContent = "Salvataggio…";
-      db.collection("config").doc("main").set({
+      userRef().collection("config").doc("main").set({
         keywords: keywords, frequency: frequency, updatedAt: new Date().toISOString()
       }).then(function(){
         saveMsg.textContent = "Impostazioni salvate — verranno usate dalla prossima scansione automatica.";
@@ -704,12 +767,11 @@
   var resetMsg = document.getElementById("resetMsg");
   if(resetBtn){
     resetBtn.addEventListener("click", function(){
-      if(!db) return;
-      if(!requireUnlock(resetMsg)) return;
+      if(!db || !userRef()) return;
       var ok = window.confirm("Sicuro di voler eliminare TUTTI i bandi trovati finora? Non si può annullare. Le impostazioni (parole chiave, frequenza) restano invariate.");
       if(!ok) return;
       resetBtn.disabled = true; resetMsg.textContent = "Richiesta inviata…";
-      db.collection("admin").doc("reset").set({ requested: true, requestedAt: new Date().toISOString() })
+      userRef().collection("admin").doc("reset").set({ requested: true, requestedAt: new Date().toISOString() })
         .then(function(){
           resetMsg.textContent = "Fatto — i bandi verranno rimossi alla prossima esecuzione dello scraper (entro 6 ore, o subito se la lanci a mano da GitHub Actions).";
           resetBtn.disabled = false;
@@ -720,29 +782,9 @@
     });
   }
 
-  var resetTopicBtn = document.getElementById("resetTopicBtn");
-  var resetTopicMsg = document.getElementById("resetTopicMsg");
-  if(resetTopicBtn){
-    resetTopicBtn.addEventListener("click", function(){
-      if(!db) return;
-      if(!requireUnlock(resetTopicMsg)) return;
-      var ok = window.confirm("Sicuro di voler cambiare argomento? Verranno eliminati TUTTI i bandi trovati finora E tutte le fonti monitorate. Non si può annullare. Parole chiave e frequenza restano invariate.");
-      if(!ok) return;
-      resetTopicBtn.disabled = true; resetTopicMsg.textContent = "Richiesta inviata…";
-      db.collection("admin").doc("reset").set({ requested: true, alsoClearSources: true, requestedAt: new Date().toISOString() })
-        .then(function(){
-          resetTopicMsg.textContent = "Fatto — bandi e fonti verranno svuotati alla prossima esecuzione dello scraper (entro 6 ore, o subito se la lanci a mano da GitHub Actions).";
-          resetTopicBtn.disabled = false;
-        }).catch(function(){
-          resetTopicMsg.textContent = "Errore, riprova.";
-          resetTopicBtn.disabled = false;
-        });
-    });
-  }
-
   if(scanBtn){
     scanBtn.addEventListener("click", function(){
-      if(!requireUnlock(scanMsg)) return;
+      if(!currentUser){ scanMsg.textContent = "Devi prima accedere per avviare una scansione."; return; }
       var cfg = window.SCAN_CONFIG;
       if(!cfg || !cfg.workerUrl || !cfg.sharedSecret || cfg.sharedSecret.indexOf("INCOLLA_QUI") === 0){
         scanMsg.textContent = "Configura scan-config.js per abilitare l'avvio scansione da qui (vedi SETUP.md).";

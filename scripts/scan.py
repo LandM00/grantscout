@@ -3,21 +3,25 @@
 Scraper periodico per GrantScout.
 
 Gira su GitHub Actions secondo lo schedule in .github/workflows/scan.yml
-(di default ogni 6 ore). Ad ogni esecuzione:
+(di default ogni 6 ore). App MULTI-UTENTE: ogni persona registrata ha le
+proprie parole chiave, la propria frequenza e i propri bandi trovati,
+sotto users/{uid}/... in Firestore; l'elenco delle pagine istituzionali
+da controllare (collection "sources") è invece CONDIVISO tra tutti.
+Ad ogni esecuzione:
 
-  1. Legge da Firestore le impostazioni (config/main: keywords, frequency)
-     e l'ultima esecuzione (meta/status: lastRun).
-  2. Decide se è davvero il momento di fare una scansione completa,
-     confrontando il tempo trascorso con la frequenza scelta dall'utente
-     nell'app (weekly / biweekly / monthly). Questo permette di far girare
-     il workflow spesso (per reagire in fretta a un cambio di impostazioni)
-     senza sprecare tempo a fare scraping ad ogni esecuzione.
-  3. Se è il momento: prova a interrogare l'API pubblica del portale
-     Funding & Tenders (Horizon Europe) e controlla un elenco di pagine
-     istituzionali (configurabile in Firestore, collection "sources")
-     cercando la presenza delle parole chiave scelte dall'utente.
-  4. Scrive/aggiorna i risultati nella collection "calls" di Firestore,
-     e aggiorna meta/status.
+  1. Legge l'elenco delle fonti condivise (sources) e SCARICA ciascuna
+     pagina UNA SOLA VOLTA per questo giro (fetch_watch_pages),
+     indipendentemente da quante persone la stiano monitorando — non ha
+     senso richiedere la stessa pagina più volte allo stesso sito esterno
+     solo perché più utenti la seguono con parole chiave diverse.
+  2. Legge l'elenco degli utenti registrati (collection "users").
+  3. Per ciascun utente, separatamente: decide se è il momento di
+     scansionare (confrontando il tempo trascorso con la frequenza scelta
+     da LUI), interroga l'API del portale Funding & Tenders (Horizon
+     Europe) con le SUE parole chiave, confronta le pagine condivise già
+     scaricate al passo 1 con le SUE parole chiave, e scrive i risultati
+     SOLO nel suo spazio privato (users/{uid}/calls). Un errore per un
+     utente non blocca la scansione degli altri.
 
 Non usa nessun modello linguistico: è ricerca per parola chiave e
 rilevamento di cambiamenti di pagina, non un giudizio "intelligente" di
@@ -27,11 +31,10 @@ L'elenco delle pagine istituzionali da controllare NON è fisso nel
 codice: vive nella collection Firestore "sources" (ognuna: url, funder,
 category, title) e parte vuoto — si aggiunge/toglie/modifica fonti
 direttamente dall'app (pannello "Impostazioni ricerca" → "Fonti
-monitorate"), senza toccare il codice. Una fonte produce una
-segnalazione SOLO se il suo testo contiene una parola chiave cercata:
-non basta più che la pagina sia semplicemente "cambiata", per evitare
-falsi allarmi quando si cambia argomento di ricerca (pulsante
-"Cambia argomento" nell'app).
+monitorate"), senza toccare il codice, e chiunque abbia un account può
+farlo (è un catalogo comune, non di proprietà di un singolo utente). Una
+fonte produce una segnalazione SOLO se il suo testo contiene una parola
+chiave cercata: non basta che la pagina sia semplicemente "cambiata".
 
 Nota: questo script usava anche la Custom Search JSON API di Google per
 una ricerca generica sul web, rimossa a settembre 2026 perché Google ha
@@ -121,80 +124,6 @@ HTTP_TIMEOUT = 25
 JINA_READER_PREFIX = "https://r.jina.ai/"
 JINA_TIMEOUT = 45  # piu lento della richiesta diretta: usa un browser headless vero
 
-# Dati iniziali (raccolti manualmente l'11/09/2026) inseriti una sola volta,
-# così l'app non parte vuota mentre lo scraper automatico matura.
-SEED_CALLS = [
-    {
-        "id": "horizon-cl2-2026-01-transfo-08",
-        "title": "Support all'attuazione del Patto UE su Migrazione e Asilo / equità sanitaria e inclusione sociale per migranti e rifugiati",
-        "funder": "Commissione Europea — Horizon Europe, Cluster 2 (HORIZON-CL2-2026-01-TRANSFO-08)",
-        "amount": "€3-4 mln a progetto (bando totale €12 mln)",
-        "category": "funding",
-        "status": "closed",
-        "deadlineDate": "2026-09-23",
-        "tags": ["UE", "Horizon Europe", "migrazione", "asilo", "salute"],
-        "summary": "Finanzia progetti che sostengono l'attuazione del Patto UE su Migrazione e Asilo o migliorano equità sanitaria e inclusione sociale di migranti e rifugiati. Utile soprattutto per capire il prossimo ciclo Cluster 2.",
-        "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/calls-for-proposals?callIdentifier=HORIZON-CL2-2026-01",
-    },
-    {
-        "id": "cost-open-call-2026-01",
-        "title": "COST Open Call 2026 — proposta di nuova COST Action",
-        "funder": "COST Association",
-        "amount": "fino a ~€690.000 per rete su 4 anni",
-        "category": "network",
-        "status": "open",
-        "deadlineDate": "2026-10-28",
-        "tags": ["rete", "bottom-up", "UE", "COST Action"],
-        "summary": "Meccanismo bottom-up per proporre una nuova rete di ricerca europea su qualsiasi tema, incluse le scienze sociali. Occasione per costruire una rete su lavoro migrante e agricoltura con partner europei.",
-        "url": "https://www.cost.eu/funding/open-call-a-simple-one-step-application-process/",
-    },
-    {
-        "id": "prin-2026",
-        "title": "PRIN 2026 — Progetti di Ricerca di Rilevante Interesse Nazionale",
-        "funder": "MUR — Ministero dell'Università e della Ricerca",
-        "amount": "€260 mln complessivi, progetti triennali",
-        "category": "funding",
-        "status": "closed",
-        "deadlineDate": "2026-06-01",
-        "tags": ["Italia", "PRIN", "chiuso"],
-        "summary": "Bando nazionale italiano già chiuso (domande dal 17 aprile al 1° giugno 2026). Utile per monitorare l'apertura del prossimo ciclo, atteso indicativamente nel 2027.",
-        "url": "https://www.mur.gov.it/it/atti-e-normativa/decreto-direttoriale-n-2298-del-10-04-2026",
-    },
-    {
-        "id": "alto-adige-ricerca-innovazione",
-        "title": "Bandi Ricerca e Innovazione della Provincia Autonoma di Bolzano",
-        "funder": "Ripartizione Innovazione, Ricerca e Università — Provincia di Bolzano/Alto Adige",
-        "category": "funding",
-        "status": "rolling",
-        "deadlineText": "scadenze multiple e variabili — verificare portale",
-        "tags": ["Alto Adige", "Eurac", "partnership UE", "agroecologia"],
-        "summary": "Diversi strumenti provinciali (Research Südtirol, mobilità ricercatori, partenariati UE come AGROECOLOGY e FutureFoodS) potrebbero rilevare per un progetto su migrazione e lavoro agricolo radicato sul territorio.",
-        "url": "https://innovazione-ricerca.provincia.bz.it/it/agevolazioni-bandi",
-    },
-    {
-        "id": "dach-lead-agency",
-        "title": "Procedura D-A-CH (Germania-Austria-Svizzera) tra DFG, FWF e SNF",
-        "funder": "DFG (Germania) / FWF (Austria) / SNF (Svizzera)",
-        "category": "funding",
-        "status": "rolling",
-        "deadlineText": "nessuna scadenza fissa — presentazione continua",
-        "tags": ["DACH", "Germania", "Austria", "Svizzera", "meccanismo permanente"],
-        "summary": "Meccanismo di co-finanziamento trilaterale per progetti con partner in Germania, Austria e Svizzera — area con forte tradizione di studi su lavoro migrante.",
-        "url": "https://www.dfg.de/de/foerderung/foerdermoeglichkeiten/programme/inter-foerdermassnahmen/antragstellung-oesterreich-schweiz",
-    },
-    {
-        "id": "imiscoe-network",
-        "title": "Rete IMISCOE — conferenze, forum e gruppi di lavoro su migrazione",
-        "funder": "IMISCOE (rete europea di istituti di ricerca sulla migrazione)",
-        "category": "network",
-        "status": "rolling",
-        "deadlineText": "call periodiche — prossima da verificare",
-        "tags": ["rete", "conferenze", "migration studies"],
-        "summary": "La principale rete europea di ricerca sulla migrazione organizza conferenze e workshop con call for papers ricorrenti — buona vetrina per trovare partner.",
-        "url": "https://www.imiscoe.org/",
-    },
-]
-
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -211,9 +140,33 @@ def init_firestore():
     return firestore.client()
 
 
-def get_doc(db, collection, doc_id, default=None):
-    snap = db.collection(collection).document(doc_id).get()
+def get_doc(doc_ref, default=None):
+    """Legge un documento Firestore a partire dal suo riferimento già
+    pronto (doc_ref), con un valore di ripiego se non esiste. Prima
+    costruiva sempre il riferimento a partire dalla radice (db, nome
+    collection, id): ora che le impostazioni/lo stato sono per-utente
+    (sotto users/{uid}/...), passare direttamente il riferimento è più
+    comodo — funziona comunque anche per un documento condiviso a
+    livello radice (es. meta/status), basta passargli quel riferimento."""
+    snap = doc_ref.get()
     return snap.to_dict() if snap.exists else (default or {})
+
+
+def list_registered_users(db):
+    """Elenco degli utenti registrati: un piccolo documento users/{uid}
+    (email, data di registrazione) creato dal client al momento della
+    registrazione (vedi docs/index.html) — usato per sapere per chi far
+    girare la scansione. Un utente che si è solo autenticato ma il cui
+    documento non esiste per qualche motivo (es. scrittura fallita al
+    momento della registrazione) verrebbe semplicemente ignorato qui:
+    non è un problema di sicurezza (i suoi dati restano privati, le
+    regole di Firestore lo proteggono comunque), ma un caso limite da
+    tenere a mente se un utente segnala di non vedere mai risultati."""
+    users = []
+    for doc in db.collection("users").stream():
+        data = doc.to_dict() or {}
+        users.append({"uid": doc.id, "email": data.get("email", "")})
+    return users
 
 
 def should_run(config, meta):
@@ -243,10 +196,13 @@ def load_sources(db):
     return sources
 
 
-def _delete_all(db, collection_name):
-    """Elimina tutti i documenti di una collection, a lotti di 400
-    (limite di Firestore per batch). Restituisce quanti ne ha eliminati."""
-    docs = list(db.collection(collection_name).stream())
+def _delete_all(db, collection_ref):
+    """Elimina tutti i documenti di una collection (identificata dal suo
+    riferimento già pronto, non più dal nome a partire dalla radice: ora
+    che i bandi vivono sotto users/{uid}/calls, serve poter puntare a
+    una sotto-collection), a lotti di 400 (limite di Firestore per
+    batch). Restituisce quanti ne ha eliminati."""
+    docs = list(collection_ref.stream())
     batch = db.batch()
     for i, doc in enumerate(docs):
         batch.delete(doc.reference)
@@ -257,47 +213,31 @@ def _delete_all(db, collection_name):
     return len(docs)
 
 
-def check_and_apply_reset(db):
-    """Il pulsante 'Ricomincia da zero' nell'app scrive admin/reset con
-    requested=true: qui lo leggiamo e svuotiamo la collection 'calls'
-    (non le fonti né le impostazioni). Il pulsante 'Cambia argomento'
-    scrive in più anche alsoClearSources=true: in quel caso svuotiamo
-    anche la collection 'sources', così si riparte da zero anche sulle
-    pagine monitorate quando si cambia completamente argomento."""
-    snap = db.collection("admin").document("reset").get()
+def check_and_apply_reset(db, user_ref):
+    """Il pulsante 'Ricomincia da zero' nell'app scrive
+    users/{uid}/admin/reset con requested=true: qui lo leggiamo e
+    svuotiamo SOLO i bandi di QUESTO utente (users/{uid}/calls).
+
+    A differenza della versione a singolo utente, qui NON esiste più
+    un'opzione per svuotare anche le fonti monitorate insieme al reset:
+    le fonti sono condivise fra tutti gli utenti (vedi firestore.rules),
+    quindi il "cambio argomento" di una persona non può più cancellare
+    l'elenco comune per tutti gli altri. Per togliere una fonte condivisa
+    si usa il pulsante "Rimuovi" dedicato in "Fonti monitorate", uno per
+    uno, come qualsiasi altra modifica all'elenco condiviso."""
+    reset_ref = user_ref.collection("admin").document("reset")
+    snap = reset_ref.get()
     if not snap.exists:
         return False
     data = snap.to_dict() or {}
     if not data.get("requested"):
         return False
-    n_calls = _delete_all(db, "calls")
-    n_sources = None
-    if data.get("alsoClearSources"):
-        n_sources = _delete_all(db, "sources")
-    db.collection("admin").document("reset").set({
+    n_calls = _delete_all(db, user_ref.collection("calls"))
+    reset_ref.set({
         "requested": False,
         "lastResetAt": now_iso(),
     })
-    if n_sources is None:
-        print("Reset richiesto dall'app: eliminati {} bandi.".format(n_calls))
-    else:
-        print("Reset richiesto dall'app (cambio argomento): eliminati {} bandi e {} fonti monitorate.".format(n_calls, n_sources))
-    return True
-
-
-def seed_if_empty(db):
-    existing = list(db.collection("calls").limit(1).stream())
-    if existing:
-        return False
-    batch = db.batch()
-    for item in SEED_CALLS:
-        doc_id = item["id"]
-        data = {k: v for k, v in item.items() if k != "id"}
-        data["foundAt"] = now_iso()
-        data["source"] = "seed-manuale"
-        batch.set(db.collection("calls").document(doc_id), data)
-    batch.commit()
-    print("Seed iniziale inserito ({} bandi).".format(len(SEED_CALLS)))
+    print("[{}] Reset richiesto dall'utente: eliminati {} bandi.".format(user_ref.id, n_calls))
     return True
 
 
@@ -1061,37 +1001,32 @@ BANDO_SIGNAL_PHRASES = [
 ]
 
 
-def check_watch_pages(keywords, previous_hashes, sources):
-    """Per ogni pagina in 'sources' (da Firestore): scarica il testo e
-    controlla se contiene una delle parole chiave scelte dall'utente. Non
-    "capisce" il contenuto: segnala solo dove guardare a mano. Segnala
-    SOLO quando trova davvero una parola chiave (il solo fatto che la
-    pagina sia cambiata non basta più): questo evita falsi allarmi
-    quando si cambia argomento di ricerca ma una fonte fissa cambia per
-    conto suo (es. una data o un banner).
+def fetch_watch_pages(sources, previous_hashes):
+    """Scarica il testo di ogni fonte CONDIVISA in 'sources' UNA SOLA
+    VOLTA per questo giro di scansione — indipendentemente da quanti
+    utenti la stiano monitorando: prima (versione a singolo utente)
+    questa funzione faceva anche il confronto con le parole chiave nello
+    stesso ciclo, il che nella versione multi-utente avrebbe richiesto la
+    stessa pagina un'altra volta per ciascun utente. Qui invece si scarica
+    e si prepara il testo (tokenizzato, pronto per keyword_matches_text)
+    una volta, e chi chiama (match_watch_pages_for_user, una volta per
+    ciascun utente) riusa lo stesso risultato senza fare altre richieste
+    di rete per il testo della pagina.
 
-    Oltre alla parola chiave, richiediamo anche che la pagina contenga
-    almeno un termine tipico di un bando vero (BANDO_SIGNAL_PHRASES, es.
-    "scadenza", "candidatura", "call for proposals"): serve a scartare
-    pagine che citano la parola chiave solo in una notizia o in un
-    contesto generico, senza essere davvero un'opportunità a cui
-    candidarsi. ATTENZIONE: è un compromesso esplicito, non infallibile —
-    una pagina che descrive un vero bando con un linguaggio insolito
-    (nessuno dei termini elencati) può non essere segnalata. È
-    l'opposto della scelta fatta altrove in questo file (dove si
-    preferisce un falso positivo in più a un falso negativo): qui
-    l'utente ha chiesto esplicitamente di ridurre le notizie irrilevanti
-    anche a costo di perdere qualche bando scritto in modo insolito.
-
-    Oltre ai risultati, restituisce anche `page_status`: un elenco con
-    l'esito (raggiunta o no, ed eventuale errore) di OGNI pagina
-    controllata, indipendentemente dal fatto che abbia prodotto una
-    segnalazione. Serve a chi chiama per distinguere "questa pagina non ha
-    nulla di nuovo" da "questa pagina non si riesce più a raggiungere" —
-    prima quest'ultimo caso spariva silenziosamente in un print nel log."""
-    results = []
-    new_hashes = dict(previous_hashes)
+    Restituisce (page_cache, page_status, new_hashes):
+    - page_cache: {source_id: {"tokens": [...], "changed": bool}} per le
+      pagine raggiunte con successo (assente per le altre — vedi
+      page_status per il motivo).
+    - page_status: elenco con l'esito (raggiunta o no, ed eventuale
+      errore) di OGNI pagina, condiviso e identico per tutti gli utenti
+      (la raggiungibilità di una pagina è un fatto sulla pagina, non su
+      chi la guarda).
+    - new_hashes: hash aggiornati da salvare in meta/status (condiviso):
+      "changed" (contenuto diverso dall'ultimo controllo) è anch'esso un
+      fatto oggettivo sulla pagina, non specifico di un utente."""
+    page_cache = {}
     page_status = []
+    new_hashes = dict(previous_hashes)
     for page in sources:
         try:
             text = fetch_page_text(page["url"])
@@ -1101,127 +1036,164 @@ def check_watch_pages(keywords, previous_hashes, sources):
             new_hashes[page["id"]] = content_hash
 
             # Tokenizziamo la pagina UNA sola volta (non ad ogni parola
-            # chiave): keyword_matches_text tollera plurali/varianti e
-            # frasi non adiacenti, vedi il suo commento sopra.
-            page_tokens = _tokenize(text_lower)
-            matched_keywords = [kw for kw in keywords if kw and keyword_matches_text(kw, page_tokens)]
-
+            # chiave, e non per ogni utente): keyword_matches_text tollera
+            # plurali/varianti e frasi non adiacenti, vedi il suo commento
+            # sopra. "html" resta assente qui: lo scarichiamo solo se e
+            # quando serve davvero (vedi _get_cached_page_html sotto), non
+            # per ogni pagina indipendentemente dal fatto che interessi a
+            # qualcuno.
+            page_cache[page["id"]] = {
+                "tokens": _tokenize(text_lower),
+                "changed": changed,
+            }
             page_status.append({
                 "id": page["id"], "url": page["url"], "funder": page.get("funder", ""), "ok": True,
             })
-
-            if not matched_keywords:
-                continue  # nessuna parola chiave trovata: niente da segnalare
-
-            # Da qui in poi la pagina e' stata GIA raggiunta e letta con successo
-            # (page_status sopra e' gia' "ok: True" per questo id): un errore nel
-            # resto dell'elaborazione (es. una fonte senza "title"/"category" in
-            # Firestore) riguarda solo il contenuto, non la raggiungibilita' della
-            # pagina. Isolato nel suo proprio try/except cosi', in caso di errore,
-            # si salta semplicemente la segnalazione per questa pagina SENZA
-            # aggiungere un secondo elemento a page_status per lo stesso id --
-            # altrimenti la stessa pagina risulterebbe contata sia come riuscita
-            # che come fallita nello stesso ciclo (bug reale trovato in un audit di
-            # robustezza: corrompeva i conteggi usati da compute_health).
-            try:
-                matched_signal = next(
-                    (sig for sig in BANDO_SIGNAL_PHRASES if keyword_matches_text(sig, page_tokens)),
-                    None,
-                )
-                if not matched_signal:
-                    continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
-
-                # Arricchimento facoltativo: proviamo a individuare i singoli
-                # link della pagina che riguardano davvero una parola chiave,
-                # invece di lasciare solo il link generico all'intera pagina.
-                # Richiede l'HTML grezzo (fetch_page_html), diverso dal testo
-                # "pulito" usato sopra per hash/parole chiave/segnale -- se non
-                # e' disponibile (o non trova nulla di specifico) restiamo sul
-                # comportamento di sempre: nessuna regressione.
-                match_items = []
-                try:
-                    page_html = fetch_page_html(page["url"])
-                    if page_html:
-                        match_items = extract_matching_links(page_html, page["url"], matched_keywords)
-                except Exception:  # noqa: BLE001
-                    match_items = []
-
-                note_parts = []
-                if matched_keywords:
-                    note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
-                note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
-                if changed:
-                    note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
-                if match_items:
-                    summary = (
-                        "Trovati {} link specifici in questa pagina che contengono le tue parole chiave "
-                        "(vedi elenco sotto) — " + "; ".join(note_parts) + "."
-                    ).format(len(match_items))
-                else:
-                    summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
-
-                # Punteggio di rilevanza: 0 se il "segnale" è solo il
-                # cambiamento di contenuto (nessuna parola chiave — spesso
-                # rumore, es. un banner o una data che cambia), altrimenti
-                # cresce con quante/quali parole chiave hanno trovato
-                # riscontro (vedi compute_match_score). Niente etichetta
-                # quando il punteggio è 0: non vogliamo far sembrare "debole"
-                # un segnale che in realtà non ha nessuna parola chiave dietro.
-                match_score = compute_match_score(matched_keywords)
-                relevance_tag = relevance_label(match_score)
-
-                results.append({
-                    "id": "watch-" + page["id"],
-                    # .get() con ripiego, non accesso diretto: una fonte aggiunta
-                    # senza titolo/categoria (es. a mano su Firestore, o con un
-                    # form futuro meno rigido) non deve far fallire l'intera
-                    # segnalazione -- meglio un titolo/categoria generici che
-                    # nessuna segnalazione.
-                    "title": page.get("title") or page.get("funder") or page["url"],
-                    "funder": page.get("funder", ""),
-                    "category": page.get("category") or "funding",
-                    "status": "watch",
-                    "deadlineText": "vedi pagina ufficiale",
-                    "tags": ["da verificare"] + (["aggiornata"] if changed else []) + ([relevance_tag] if relevance_tag else []),
-                    "summary": summary,
-                    "matchScore": match_score,
-                    "url": page["url"],
-                    "source": "page-watcher",
-                    # Elenco di link specifici trovati su questa pagina (puo'
-                    # essere vuoto: in quel caso l'app mostra solo il link
-                    # generico alla pagina intera, come faceva finora).
-                    "matches": match_items,
-                })
-            except Exception as exc:  # noqa: BLE001 -- vedi commento sopra: NON tocchiamo page_status qui
-                print("Avviso: pagina raggiunta ma elaborazione del contenuto non riuscita per {} ({}). Salto la segnalazione per questa pagina.".format(page["url"], exc))
-                continue
         except Exception as exc:  # noqa: BLE001
             print("Avviso: impossibile controllare {} ({}). Salto.".format(page["url"], exc))
             page_status.append({
                 "id": page["id"], "url": page["url"], "funder": page.get("funder", ""),
                 "ok": False, "error": str(exc),
             })
-    return results, new_hashes, page_status
+    return page_cache, page_status, new_hashes
 
 
-def prune_stale_watch_calls(db, current_source_ids):
-    """Le segnalazioni delle fonti fisse (source == "page-watcher") hanno id
-    "watch-<id della fonte>". A differenza dei bandi Horizon Europe (vedi
-    prune_stale_horizon_calls sotto), qui NON le riallineiamo ad ogni
-    scansione: sono pensate per tracciare uno stato nel tempo, quindi una
-    fonte che questo giro non trova piu' un match non deve perdere la sua
-    segnalazione precedente (potrebbe essere solo una pagina temporaneamente
-    diversa, non un motivo per dimenticare quanto trovato prima).
+def _get_cached_page_html(cached_entry, url):
+    """Scarica l'HTML grezzo di una pagina SOLO la prima volta che serve
+    davvero (il primo utente le cui parole chiave trovano un match su
+    quella pagina), e lo ricorda in cached_entry (lo stesso dizionario
+    condiviso da page_cache, mutato sul posto) per gli utenti successivi
+    nello stesso giro di scansione — cosi' una pagina con match per più
+    utenti viene scaricata in HTML al massimo una volta per giro, non una
+    volta per utente, e una pagina senza nessun match per nessuno non
+    viene scaricata in HTML per nulla (comportamento invariato rispetto
+    a prima: era già un arricchimento "lazy", solo se matched_keywords
+    non era vuoto)."""
+    if "html" not in cached_entry:
+        try:
+            cached_entry["html"] = fetch_page_html(url)
+        except Exception:  # noqa: BLE001
+            cached_entry["html"] = None
+    return cached_entry["html"]
+
+
+def match_watch_pages_for_user(keywords, sources, page_cache):
+    """Confronta, per UN singolo utente, le sue parole chiave con le
+    pagine CONDIVISE già scaricate (page_cache, vedi fetch_watch_pages
+    sopra) — non fa nessuna richiesta di rete per il testo della pagina,
+    e riusa la cache anche per l'eventuale arricchimento HTML (vedi
+    _get_cached_page_html). Stessa identica logica di prima (segnala
+    SOLO quando trova davvero una parola chiave E un termine tipico di
+    un bando vero, vedi BANDO_SIGNAL_PHRASES), applicata al testo in
+    cache invece che scaricandolo di nuovo."""
+    results = []
+    for page in sources:
+        cached = page_cache.get(page["id"])
+        if cached is None:
+            continue  # pagina non raggiunta questo giro: gia' in page_status (condiviso, non per-utente)
+
+        page_tokens = cached["tokens"]
+        matched_keywords = [kw for kw in keywords if kw and keyword_matches_text(kw, page_tokens)]
+        if not matched_keywords:
+            continue  # nessuna parola chiave trovata: niente da segnalare
+
+        # Isolato nel suo proprio try/except: un errore qui (es. una fonte
+        # senza "title"/"category" in Firestore) riguarda solo
+        # l'elaborazione del contenuto per QUESTO utente, non la
+        # raggiungibilita' della pagina (gia' accertata in
+        # fetch_watch_pages) né gli altri utenti.
+        try:
+            matched_signal = next(
+                (sig for sig in BANDO_SIGNAL_PHRASES if keyword_matches_text(sig, page_tokens)),
+                None,
+            )
+            if not matched_signal:
+                continue  # parola chiave trovata ma nessun segnale tipico di un bando vero: probabile notizia/menzione generica
+
+            # Arricchimento facoltativo: proviamo a individuare i singoli
+            # link della pagina che riguardano davvero una parola chiave,
+            # invece di lasciare solo il link generico all'intera pagina.
+            # Richiede l'HTML grezzo, in cache condivisa (vedi
+            # _get_cached_page_html) -- se non e' disponibile (o non
+            # trova nulla di specifico) restiamo sul comportamento di
+            # sempre: nessuna regressione.
+            match_items = []
+            try:
+                page_html = _get_cached_page_html(cached, page["url"])
+                if page_html:
+                    match_items = extract_matching_links(page_html, page["url"], matched_keywords)
+            except Exception:  # noqa: BLE001
+                match_items = []
+
+            note_parts = []
+            if matched_keywords:
+                note_parts.append("parole chiave trovate: " + ", ".join(matched_keywords[:5]))
+            note_parts.append("contiene anche linguaggio tipico di un bando (\"" + matched_signal + "\")")
+            if cached["changed"]:
+                note_parts.append("contenuto della pagina cambiato dall'ultimo controllo")
+            if match_items:
+                summary = (
+                    "Trovati {} link specifici in questa pagina che contengono le tue parole chiave "
+                    "(vedi elenco sotto) — " + "; ".join(note_parts) + "."
+                ).format(len(match_items))
+            else:
+                summary = "Da verificare manualmente — " + "; ".join(note_parts) + "."
+
+            # Punteggio di rilevanza: 0 se il "segnale" è solo il
+            # cambiamento di contenuto (nessuna parola chiave — spesso
+            # rumore, es. un banner o una data che cambia), altrimenti
+            # cresce con quante/quali parole chiave hanno trovato
+            # riscontro (vedi compute_match_score). Niente etichetta
+            # quando il punteggio è 0: non vogliamo far sembrare "debole"
+            # un segnale che in realtà non ha nessuna parola chiave dietro.
+            match_score = compute_match_score(matched_keywords)
+            relevance_tag = relevance_label(match_score)
+
+            results.append({
+                "id": "watch-" + page["id"],
+                # .get() con ripiego, non accesso diretto: una fonte aggiunta
+                # senza titolo/categoria (es. a mano su Firestore, o con un
+                # form futuro meno rigido) non deve far fallire l'intera
+                # segnalazione -- meglio un titolo/categoria generici che
+                # nessuna segnalazione.
+                "title": page.get("title") or page.get("funder") or page["url"],
+                "funder": page.get("funder", ""),
+                "category": page.get("category") or "funding",
+                "status": "watch",
+                "deadlineText": "vedi pagina ufficiale",
+                "tags": ["da verificare"] + (["aggiornata"] if cached["changed"] else []) + ([relevance_tag] if relevance_tag else []),
+                "summary": summary,
+                "matchScore": match_score,
+                "url": page["url"],
+                "source": "page-watcher",
+                # Elenco di link specifici trovati su questa pagina (puo'
+                # essere vuoto: in quel caso l'app mostra solo il link
+                # generico alla pagina intera, come faceva finora).
+                "matches": match_items,
+            })
+        except Exception as exc:  # noqa: BLE001
+            print("Avviso: pagina raggiunta ma elaborazione del contenuto non riuscita per {} ({}). Salto la segnalazione per questa pagina.".format(page["url"], exc))
+            continue
+    return results
+
+
+def prune_stale_watch_calls(db, user_ref, current_source_ids):
+    """Le segnalazioni delle fonti fisse (source == "page-watcher"), nello
+    spazio privato DI QUESTO UTENTE (user_ref.collection("calls")), hanno
+    id "watch-<id della fonte>". A differenza dei bandi Horizon Europe
+    (vedi prune_stale_horizon_calls sotto), qui NON le riallineiamo ad
+    ogni scansione: sono pensate per tracciare uno stato nel tempo, quindi
+    una fonte che questo giro non trova piu' un match non deve perdere la
+    sua segnalazione precedente (potrebbe essere solo una pagina
+    temporaneamente diversa, non un motivo per dimenticare quanto trovato
+    prima).
 
     Rimuoviamo SOLO le segnalazioni la cui fonte e' stata esplicitamente
-    rimossa dall'utente (pulsante "Rimuovi" in "Fonti monitorate"): quelle
-    sono inequivocabilmente orfane -- prima restavano per sempre in lista
-    anche dopo aver rimosso la fonte che le aveva prodotte, visibili solo
-    svuotando TUTTI i bandi con un reset completo. Il client web non puo'
-    farlo da solo (firestore.rules nega la scrittura su "calls" a chiunque
-    non sia lo script con la Admin SDK), quindi la pulizia avviene qui, alla
-    prossima scansione dopo la rimozione."""
-    docs = db.collection("calls").where("source", "==", "page-watcher").stream()
+    rimossa dall'elenco CONDIVISO (pulsante "Rimuovi" in "Fonti
+    monitorate", che chiunque abbia un account puo' premere): quelle sono
+    inequivocabilmente orfane per tutti gli utenti che le avevano, non
+    solo per chi ha premuto il pulsante."""
+    docs = user_ref.collection("calls").where("source", "==", "page-watcher").stream()
     batch = db.batch()
     removed = 0
     for doc in docs:
@@ -1236,18 +1208,19 @@ def prune_stale_watch_calls(db, current_source_ids):
     return removed
 
 
-def prune_stale_horizon_calls(db, current_ids):
-    """I bandi trovati su Horizon Europe (source == "funding-tenders-api")
-    sono il riflesso di una ricerca dal vivo, fatta da zero ad ogni
-    scansione: se un bando non compare piu tra i risultati (perche non
-    corrisponde piu alle parole chiave, o -- come scoperto oggi -- perche
-    in realta era un progetto gia finanziato ora giustamente escluso), non
-    ha senso lasciarlo per sempre nel database con dati potenzialmente non
-    piu validi (incluso, prima di oggi, un link ormai rotto). A differenza
-    delle pagine monitorate (che rappresentano uno stato da tracciare nel
-    tempo), i risultati Horizon vengono qui riallineati esattamente a
-    quanto trovato nell'ultima scansione: chi non c'e piu viene rimosso."""
-    docs = db.collection("calls").where("source", "==", "funding-tenders-api").stream()
+def prune_stale_horizon_calls(db, user_ref, current_ids):
+    """I bandi trovati su Horizon Europe (source == "funding-tenders-api"),
+    nello spazio privato DI QUESTO UTENTE, sono il riflesso di una ricerca
+    dal vivo con le SUE parole chiave, fatta da zero ad ogni scansione: se
+    un bando non compare piu tra i risultati (perche non corrisponde piu
+    alle sue parole chiave, o perche in realta era un progetto gia
+    finanziato ora giustamente escluso), non ha senso lasciarlo per sempre
+    nel suo database privato con dati potenzialmente non piu validi. A
+    differenza delle pagine monitorate (che rappresentano uno stato da
+    tracciare nel tempo), i risultati Horizon vengono qui riallineati
+    esattamente a quanto trovato nell'ultima scansione: chi non c'e piu
+    viene rimosso."""
+    docs = user_ref.collection("calls").where("source", "==", "funding-tenders-api").stream()
     batch = db.batch()
     removed = 0
     for doc in docs:
@@ -1261,9 +1234,10 @@ def prune_stale_horizon_calls(db, current_ids):
     return removed
 
 
-def upsert_calls(db, items):
-    """Scrive/aggiorna i bandi in Firestore (merge=True: aggiorna solo i
-    campi presenti, senza cancellare il resto del documento).
+def upsert_calls(db, user_ref, items):
+    """Scrive/aggiorna i bandi nello spazio privato DI QUESTO UTENTE
+    (merge=True: aggiorna solo i campi presenti, senza cancellare il
+    resto del documento).
 
     "foundAt" (la data di "trovato il" mostrata nell'app) va scritta SOLO
     la prima volta che un bando viene visto: prima leggiamo quali id tra
@@ -1275,6 +1249,7 @@ def upsert_calls(db, items):
     if not items:
         return 0
 
+    calls_ref = user_ref.collection("calls")
     doc_ids = [item["id"] for item in items]
     existing_ids = set()
     # Una sola tornata di letture (invece di una query per id) per sapere
@@ -1282,7 +1257,7 @@ def upsert_calls(db, items):
     # di scrittura, ma per sicurezza leggiamo comunque a blocchi.
     for start in range(0, len(doc_ids), 300):
         chunk = doc_ids[start:start + 300]
-        refs = [db.collection("calls").document(doc_id) for doc_id in chunk]
+        refs = [calls_ref.document(doc_id) for doc_id in chunk]
         for snapshot in db.get_all(refs):
             if snapshot.exists:
                 existing_ids.add(snapshot.id)
@@ -1293,7 +1268,7 @@ def upsert_calls(db, items):
         doc_id = item.pop("id")
         if doc_id not in existing_ids:
             item["foundAt"] = now_iso()
-        batch.set(db.collection("calls").document(doc_id), item, merge=True)
+        batch.set(calls_ref.document(doc_id), item, merge=True)
         count += 1
         if count % 400 == 0:  # limite batch Firestore
             batch.commit()
@@ -1371,9 +1346,9 @@ def compute_health(previous_health, horizon_stats, page_status):
     }
 
 
-def close_expired_calls(db):
+def close_expired_calls(user_ref):
     today = datetime.now(timezone.utc).date().isoformat()
-    docs = db.collection("calls").where("status", "in", ["open", "closing"]).stream()
+    docs = user_ref.collection("calls").where("status", "in", ["open", "closing"]).stream()
     n = 0
     for doc in docs:
         data = doc.to_dict()
@@ -1413,26 +1388,85 @@ def main():
 
 
 def _run_scan(db):
-    config = get_doc(db, "config", "main", default={"keywords": [], "frequency": DEFAULT_FREQUENCY})
-    meta = get_doc(db, "meta", "status", default={})
-
+    """Orchestratore multi-utente: scarica le fonti condivise una sola
+    volta per questo giro, poi gira una volta per ciascun utente
+    registrato (_run_scan_for_user), scrivendo ogni risultato SOLO nel
+    suo spazio privato. Un errore per un singolo utente (es. le sue
+    parole chiave producono un bug in un caso limite) viene isolato e
+    registrato per lui, e non impedisce la scansione degli altri."""
     sources = load_sources(db)
 
-    was_reset = check_and_apply_reset(db)
-    seeded = seed_if_empty(db) if not was_reset else False
-    # Dopo un reset non re-inseriamo i bandi seme: l'utente ha chiesto
-    # esplicitamente di ripartire da zero per un nuovo argomento.
+    users = list_registered_users(db)
+    if not users:
+        print("Nessun utente registrato: niente da scansionare.")
+        return
+
+    global_meta_ref = db.collection("meta").document("status")
+    global_meta = get_doc(global_meta_ref, default={})
+    previous_hashes = global_meta.get("pageHashes", {})
+
+    page_cache, page_status, new_hashes = fetch_watch_pages(sources, previous_hashes)
+    pages_ok = sum(1 for p in page_status if p["ok"])
+    print("Fonti condivise scaricate una sola volta per questo giro: {}/{} raggiunte.".format(
+        pages_ok, len(page_status)))
+
+    current_source_ids = {page["id"] for page in sources}
+
+    ran_count = 0
+    for user in users:
+        uid = user["uid"]
+        user_ref = db.collection("users").document(uid)
+        try:
+            ran = _run_scan_for_user(
+                db, user_ref, sources, page_cache, page_status, pages_ok, current_source_ids)
+            if ran:
+                ran_count += 1
+        except Exception as exc:  # noqa: BLE001 -- un utente non deve bloccare gli altri
+            print("[{}] ERRORE: la scansione per questo utente si e' interrotta per un errore imprevisto: {}: {}".format(
+                uid, type(exc).__name__, exc))
+            try:
+                user_ref.collection("meta").document("status").set({
+                    "lastRunCrashed": True,
+                    "lastCrashAt": now_iso(),
+                    "lastCrashError": "{}: {}".format(type(exc).__name__, exc),
+                }, merge=True)
+            except Exception:  # noqa: BLE001
+                print("[{}] (impossibile anche solo registrare l'errore su Firestore per questo utente)".format(uid))
+
+    global_meta_ref.set({
+        "pageHashes": new_hashes,
+        "lastSharedFetch": now_iso(),
+    }, merge=True)
+
+    print("Scansione completata: {}/{} utenti scansionati questo giro (gli altri non erano ancora al momento giusto secondo la loro frequenza).".format(
+        ran_count, len(users)))
+
+
+def _run_scan_for_user(db, user_ref, sources, page_cache, page_status, pages_ok, current_source_ids):
+    """Esegue lo scan per UN singolo utente registrato: legge le sue
+    impostazioni private (users/{uid}/config), decide se e' il momento
+    (in base alla SUA frequenza), interroga Horizon Europe con le SUE
+    parole chiave, confronta le fonti condivise gia' scaricate
+    (page_cache, vedi fetch_watch_pages) con le SUE parole chiave, e
+    scrive/pota SOLO nel suo spazio privato. Restituisce True se ha
+    davvero eseguito una scansione, False se ha saltato perche' non era
+    ancora il momento (secondo la sua frequenza)."""
+    uid = user_ref.id
+    config = get_doc(user_ref.collection("config").document("main"), default={"keywords": [], "frequency": DEFAULT_FREQUENCY})
+    meta = get_doc(user_ref.collection("meta").document("status"), default={})
+
+    was_reset = check_and_apply_reset(db, user_ref)
 
     forced = os.environ.get("FORCE_RUN") == "true"
     run_due, reason = should_run(config, meta)
-    print("Verifica frequenza: {}".format(reason))
+    print("[{}] Verifica frequenza: {}".format(uid, reason))
     if forced:
-        print("Esecuzione forzata (avviata a mano da GitHub Actions): scansione comunque in corso.")
-    if not run_due and not seeded and not was_reset and not forced:
-        print("Non è ancora il momento di eseguire la scansione. Fine.")
-        return
+        print("[{}] Esecuzione forzata (avviata a mano da GitHub Actions): scansione comunque in corso.".format(uid))
+    if not run_due and not was_reset and not forced:
+        print("[{}] Non e' ancora il momento di eseguire la scansione. Salto.".format(uid))
+        return False
 
-    keywords = config.get("keywords") or ["migrazione", "lavoro agricolo", "migrant labour agriculture"]
+    keywords = config.get("keywords") or []
     if isinstance(keywords, str):
         # Difensivo: se per un motivo qualsiasi (bug futuro, modifica a mano su
         # Firestore) "keywords" risultasse una stringa invece di un elenco,
@@ -1440,22 +1474,32 @@ def _run_scan(db):
         # (ogni lettera trattata come parola chiave separata) invece di dare un
         # errore chiaro -- la trattiamo come un'unica parola chiave.
         keywords = [keywords]
-    print("Scansione in corso con parole chiave: {}".format(keywords))
-
-    search_keywords, translations = expand_keywords_with_translation(keywords)
-    if search_keywords != keywords:
-        print("Parole chiave ampliate con traduzione automatica: {}".format(search_keywords))
-
-    horizon_terms = build_horizon_terms(keywords, translations)
-    if horizon_terms != search_keywords[:len(horizon_terms)]:
-        print("Termini usati per la ricerca su Horizon Europe: {}".format(horizon_terms))
-
-    previous_hashes = meta.get("pageHashes", {})
 
     sources_checked = []
     all_new_items = []
 
-    horizon_items, horizon_stats = search_funding_tenders_portal(horizon_terms)
+    if not keywords:
+        # Nessuna parola chiave impostata (es. utente appena registrato,
+        # non ancora configurato): nessun ripiego su un argomento
+        # predefinito (a differenza della versione a singolo utente, che
+        # aveva un argomento di ricerca fisso) -- semplicemente nessun
+        # risultato da cercare, finche' l'utente non imposta le sue
+        # parole chiave in "Impostazioni ricerca".
+        print("[{}] Nessuna parola chiave impostata: nessun risultato da cercare.".format(uid))
+        search_keywords, horizon_terms = [], []
+        horizon_items, horizon_stats = [], {"termsTotal": 0, "termsFailed": 0, "lastErrorSample": None}
+    else:
+        print("[{}] Scansione in corso con parole chiave: {}".format(uid, keywords))
+        search_keywords, translations = expand_keywords_with_translation(keywords)
+        if search_keywords != keywords:
+            print("[{}] Parole chiave ampliate con traduzione automatica: {}".format(uid, search_keywords))
+
+        horizon_terms = build_horizon_terms(keywords, translations)
+        if horizon_terms != search_keywords[:len(horizon_terms)]:
+            print("[{}] Termini usati per la ricerca su Horizon Europe: {}".format(uid, horizon_terms))
+
+        horizon_items, horizon_stats = search_funding_tenders_portal(horizon_terms)
+
     horizon_ids_now = {item["id"] for item in horizon_items}
     sources_checked.append(
         "Horizon Europe / Funding & Tenders Portal: {} risultati ({}/{} parole chiave riuscite)".format(
@@ -1463,17 +1507,16 @@ def _run_scan(db):
     )
     all_new_items.extend(horizon_items)
 
-    watch_items, new_hashes, page_status = check_watch_pages(search_keywords, previous_hashes, sources)
-    pages_ok = sum(1 for p in page_status if p["ok"])
+    watch_items = match_watch_pages_for_user(search_keywords, sources, page_cache) if search_keywords else []
     sources_checked.append(
-        "Pagine monitorate (configurabili in Firestore): {} segnalazioni — {}/{} pagine raggiunte".format(
+        "Pagine monitorate (condivise, configurabili in Firestore): {} segnalazioni — {}/{} pagine raggiunte".format(
             len(watch_items), pages_ok, len(page_status))
     )
     all_new_items.extend(watch_items)
 
     health = compute_health(meta.get("health"), horizon_stats, page_status)
     if health["issues"]:
-        print("ATTENZIONE — problemi persistenti rilevati:")
+        print("[{}] ATTENZIONE — problemi persistenti rilevati:".format(uid))
         for issue in health["issues"]:
             print("  - " + issue)
 
@@ -1481,7 +1524,7 @@ def _run_scan(db):
     # così una call trovata solo ora ma con scadenza già passata (capita con
     # l'API non ufficiale del portale UE) viene corretta nella stessa
     # esecuzione, non in quella successiva.
-    written = upsert_calls(db, all_new_items)
+    written = upsert_calls(db, user_ref, all_new_items)
 
     # La pulizia dei bandi Horizon obsoleti si fa SOLO se la ricerca di
     # questa scansione e' riuscita per intero (nessuna parola chiave
@@ -1489,33 +1532,33 @@ def _run_scan(db):
     # l'API non ha risposto per quel termine, non che il bando non esiste
     # piu' -- e cancellarlo sarebbe un errore, non una pulizia.
     if horizon_stats["termsFailed"] == 0:
-        pruned = prune_stale_horizon_calls(db, horizon_ids_now)
+        pruned = prune_stale_horizon_calls(db, user_ref, horizon_ids_now)
     else:
         pruned = 0
-        print("Pulizia bandi Horizon obsoleti saltata: {}/{} parole chiave fallite in questa scansione.".format(
-            horizon_stats["termsFailed"], horizon_stats["termsTotal"]))
+        print("[{}] Pulizia bandi Horizon obsoleti saltata: {}/{} parole chiave fallite in questa scansione.".format(
+            uid, horizon_stats["termsFailed"], horizon_stats["termsTotal"]))
 
-    # Segnalazioni delle fonti fisse orfane (fonte rimossa dall'app): vedi il
-    # commento di prune_stale_watch_calls per il perche' e' scoperto solo qui
-    # (non nel client web) e solo per le fonti rimosse (non per quelle che
-    # semplicemente non trovano piu' un match questo giro).
-    current_source_ids = {page["id"] for page in sources}
-    pruned_watch = prune_stale_watch_calls(db, current_source_ids)
+    # Segnalazioni delle fonti fisse orfane (fonte rimossa dall'elenco
+    # condiviso): vedi il commento di prune_stale_watch_calls per il
+    # perche' e' scoperto solo qui (non nel client web) e solo per le
+    # fonti rimosse (non per quelle che semplicemente non trovano piu' un
+    # match questo giro).
+    pruned_watch = prune_stale_watch_calls(db, user_ref, current_source_ids)
 
-    closed_count = close_expired_calls(db)
+    closed_count = close_expired_calls(user_ref)
 
-    db.collection("meta").document("status").set({
+    user_ref.collection("meta").document("status").set({
         "lastRun": now_iso(),
         "lastRunCrashed": False,
         "sourcesChecked": sources_checked,
-        "pageHashes": new_hashes,
         "health": health,
         "notes": "{} voci scritte/aggiornate, {} bandi Horizon obsoleti rimossi, {} segnalazioni orfane rimosse (fonte rimossa), {} bandi contrassegnati come scaduti.".format(
             written, pruned, pruned_watch, closed_count),
     }, merge=True)
 
-    print("Fatto: {} voci aggiornate, {} bandi Horizon obsoleti rimossi, {} segnalazioni orfane rimosse, {} bandi chiusi automaticamente.".format(
-        written, pruned, pruned_watch, closed_count))
+    print("[{}] Fatto: {} voci aggiornate, {} bandi Horizon obsoleti rimossi, {} segnalazioni orfane rimosse, {} bandi chiusi automaticamente.".format(
+        uid, written, pruned, pruned_watch, closed_count))
+    return True
 
 
 if __name__ == "__main__":

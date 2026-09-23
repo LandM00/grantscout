@@ -1,0 +1,40 @@
+name: Migra i dati verso il tuo account
+
+# Va lanciato UNA SOLA VOLTA, a mano, dopo aver creato il proprio account
+# nell'app (Registrati) e dopo aver aggiornato firestore.rules/scan.py al
+# nuovo modello multi-utente. Copia le impostazioni e i bandi condivisi
+# "vecchio stile" dentro /users/{uid}/... per l'account indicato, poi
+# rimuove le vecchie copie in cima -- non serve nessuna credenziale da
+# parte tua: usa lo stesso segreto FIREBASE_SERVICE_ACCOUNT gia'
+# configurato per lo scraper.
+on:
+  workflow_dispatch:
+    inputs:
+      uid:
+        description: >-
+          Il tuo uid Firebase (Firebase Console -> Authentication -> colonna "User UID",
+          dopo aver creato l'account nell'app con "Registrati").
+        required: true
+        type: string
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Imposta Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installa le dipendenze
+        run: pip install -r scripts/requirements.txt
+
+      - name: Esegui la migrazione
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          MIGRATE_UID: ${{ inputs.uid }}
+        run: python scripts/migrate_to_user.py

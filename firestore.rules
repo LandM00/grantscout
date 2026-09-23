@@ -1,48 +1,76 @@
 rules_version = '2';
-// NOTA: la lettura resta pubblica per chiunque abbia il link (nessun
-// login per consultare i bandi). La scrittura su config/admin/sources
-// invece richiede di essere autenticati: l'app chiede un codice numerico
-// (vedi SETUP.md, sezione "Proteggi le modifiche con un codice di
-// accesso") che internamente fa login con un account Firebase dedicato.
-// Chi non inserisce il codice giusto non può modificare nulla.
+// Multi-utente: ognuno ha il proprio spazio privato sotto
+// users/{uid}/... (parole chiave, bandi trovati, stato dell'ultima
+// scansione, richieste di reset). L'elenco delle fonti monitorate
+// (sources) resta invece CONDIVISO tra tutti gli utenti registrati: è un
+// catalogo comune di pagine istituzionali, gestito insieme.
+//
+// Registrazione libera: chiunque abbia il link può creare un proprio
+// account (email/password, vedi Firebase Authentication → Sign-in
+// method → Email/Password) e da quel momento vede/gestisce SOLO i propri
+// dati. Nessuna lettura pubblica senza login: a differenza della vecchia
+// versione (un solo account condiviso, PIN per scrivere), ora anche
+// consultare i bandi richiede di essere autenticati con un proprio
+// account, perché i bandi sono privati per ciascun utente.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Chiunque abbia il link dell'app può leggere le impostazioni; per
-    // modificarle (parole chiave, frequenza) serve il codice di accesso.
-    match /config/main {
-      allow read: if true;
-      allow write: if request.auth != null;
+    // Documento creato dal client al momento della registrazione
+    // (email, data di creazione): serve solo a scan.py per sapere quali
+    // utenti sono registrati (elenco su cui girare la scansione). Ogni
+    // utente può leggere/scrivere SOLO il proprio.
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
     }
 
-    // Stato dell'ultima scansione: leggibile da tutti, scrivibile SOLO dallo
-    // script che gira su GitHub Actions (usa la Admin SDK, che ignora queste
-    // regole). Nessun client web può scriverci.
-    match /meta/{doc} {
-      allow read: if true;
+    // Parole chiave e frequenza di scansione: private, solo il
+    // proprietario dell'account può leggerle o modificarle.
+    match /users/{uid}/config/{doc} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Stato dell'ultima scansione DI QUESTO UTENTE (parole chiave sue):
+    // leggibile solo da lui, scrivibile SOLO dallo script che gira su
+    // GitHub Actions (Admin SDK, ignora queste regole). Nessun client
+    // web può scriverci.
+    match /users/{uid}/meta/{doc} {
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
-    // Elenco dei bandi trovati: stessa logica, sola lettura dal client.
-    match /calls/{doc} {
-      allow read: if true;
+    // Bandi trovati per QUESTO UTENTE: stessa logica, sola lettura dal
+    // client, e solo per il proprietario.
+    match /users/{uid}/calls/{doc} {
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
     // Il pulsante "Ricomincia da zero" nell'app scrive qui per chiedere
-    // allo scraper di svuotare i bandi trovati al prossimo giro. Anche
-    // questo richiede il codice di accesso.
-    match /admin/reset {
-      allow read: if true;
+    // allo scraper di svuotare, al prossimo giro, SOLO i bandi trovati
+    // di questo utente (non le fonti condivise, non gli altri utenti).
+    match /users/{uid}/admin/{doc} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Elenco CONDIVISO delle pagine monitorate: chiunque abbia un
+    // account può leggerlo, aggiungere o togliere una fonte (è un
+    // catalogo comune gestito insieme, senza bisogno di un
+    // "amministratore" speciale) — deciso esplicitamente così: vedi la
+    // conversazione con l'utente in cui ha preferito questa opzione a un
+    // elenco privato per ciascuno. Lo scraper le legge tramite la Admin
+    // SDK, che ignora comunque queste regole.
+    match /sources/{doc} {
+      allow read: if request.auth != null;
       allow write: if request.auth != null;
     }
 
-    // Elenco delle pagine monitorate: leggibile da tutti; per aggiungere o
-    // rimuovere fonti serve il codice di accesso. Lo scraper le legge
-    // tramite la Admin SDK, che ignora comunque queste regole.
-    match /sources/{doc} {
-      allow read: if true;
-      allow write: if request.auth != null;
+    // Stato CONDIVISO delle fonti (raggiungibilità di ciascuna pagina,
+    // hash del contenuto per rilevare cambiamenti): scritto una sola
+    // volta per scansione dallo script (Admin SDK), letto da chiunque
+    // sia autenticato. Non contiene nulla di specifico di un utente.
+    match /meta/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }
